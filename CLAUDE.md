@@ -2,7 +2,7 @@
 
 ## What this is
 
-Send one prompt, watch up to three AI models answer it at the same time, vote for the best one. Real votes and real per-call numbers build an honest leaderboard of which model is actually worth using. Read `scope.md` before building anything, it's the living plan, broken into features, and it tracks what's actually done versus what's still open. Keep it up to date as you go, that's not optional housekeeping, it's how a fresh conversation picks this up without anyone re-explaining the project.
+Send one prompt, watch up to three AI models answer it at the same time, vote for the best one. Real votes and real per-call numbers build an honest leaderboard of which model is actually worth using. Read `docs/scope.md` before building anything, it's the living plan, broken into features, and it tracks what's actually done versus what's still open. Keep it up to date as you go, that's not optional housekeeping, it's how a fresh conversation picks this up without anyone re-explaining the project.
 
 ## How to work
 
@@ -12,9 +12,9 @@ If something genuinely forks, where a reasonable person could actually go two di
 
 Then build it. If the plan turns out wrong once it's actually built, or contradicts something already in the codebase, say so and fix the plan too, not just the code. Don't quietly work around a contradiction.
 
-When you report back, especially anything that needs a person to actually go do something, verify by hand, test a real flow, make a choice, write that part as a short bulleted list of concrete steps, not a paragraph to read through. Someone should be able to scan it and know exactly what to go do next. The detailed reasoning still belongs in `scope.md` as the permanent record, dense is fine there. What comes back in the reply should be the short version.
+When you report back, especially anything that needs a person to actually go do something, verify by hand, test a real flow, make a choice, write that part as a short bulleted list of concrete steps, not a paragraph to read through. Someone should be able to scan it and know exactly what to go do next. The detailed reasoning still belongs in `docs/scope.md` as the permanent record, dense is fine there. What comes back in the reply should be the short version.
 
-When a build step is actually underway, break it into its own short checklist of what's genuinely being done, and check items off in `scope.md` as they're finished.
+When a build step is actually underway, break it into its own short checklist of what's genuinely being done, and check items off in `docs/scope.md` as they're finished.
 
 There's no formal spec-file system here, no numbered acceptance criteria, no separate directory per feature. A short, real, plain-language decision beats a long templated one every time.
 
@@ -34,11 +34,11 @@ There's no formal spec-file system here, no numbered acceptance criteria, no sep
 
 ## Design
 
-Colors, contrast, and the accent rules are all decided in `scope.md`'s design feature, read that before touching any styling, don't guess or restate it here. Anthropic's `frontend-design` plugin must actually be invoked for any UI work, not just assumed active, it commits to a real visual direction before writing code instead of defaulting to the generic AI look. If it doesn't fire on its own, say so and invoke it directly before building any screen.
+Colors, contrast, and the accent rules are all decided in `docs/scope.md`'s design feature, read that before touching any styling, don't guess or restate it here. Anthropic's `frontend-design` plugin must actually be invoked for any UI work, not just assumed active, it commits to a real visual direction before writing code instead of defaulting to the generic AI look. If it doesn't fire on its own, say so and invoke it directly before building any screen.
 
 ## Sketches
 
-Structural reference only, arena, leaderboard, and models page, see `scope.md` for how to treat them.
+Structural reference only, arena, leaderboard, and models page, see `docs/scope.md` for how to treat them.
 
 ## Tools
 

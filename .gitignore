@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# The example carries no secrets and documents every required variable. The
+# startup error points people at it, so it has to actually be in the repo.
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +42,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/lib/generated/prisma
+
+# Machine-specific pnpm store path — committing it breaks every other checkout.
+.npmrc
+
+# Per-editor symlinks into .agents/skills. The skills themselves are committed,
+# along with skills-lock.json, so these are personal tooling rather than project
+# state and differ per contributor.
+.claude/
+.windsurf/
