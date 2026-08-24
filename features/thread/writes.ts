@@ -52,9 +52,15 @@ const NO_METRICS: MetricsColumns = {
 export const createThread = async (input: {
   readonly ownerId: string;
   readonly prompt: string;
+  /** The line-up, fixed here and never changed again. */
+  readonly modelIds: readonly string[];
 }): Promise<{ readonly threadId: string; readonly turnId: string }> => {
   const thread = await prisma.thread.create({
-    data: { ownerId: input.ownerId, turns: { create: { ordinal: 0, prompt: input.prompt } } },
+    data: {
+      ownerId: input.ownerId,
+      modelIds: [...input.modelIds],
+      turns: { create: { ordinal: 0, prompt: input.prompt } },
+    },
     select: { id: true, turns: { select: { id: true } } },
   });
 
@@ -78,7 +84,7 @@ export const appendTurn = async (input: {
   readonly threadId: string;
   readonly ownerId: string;
   readonly prompt: string;
-}): Promise<WriteResult<{ readonly turnId: string }>> =>
+}): Promise<WriteResult<{ readonly turnId: string; readonly ordinal: number }>> =>
   prisma.$transaction(async (tx) => {
     const thread = await tx.thread.findUnique({
       where: { id: input.threadId },
@@ -98,10 +104,10 @@ export const appendTurn = async (input: {
         ordinal: (_max.ordinal ?? -1) + 1,
         prompt: input.prompt,
       },
-      select: { id: true },
+      select: { id: true, ordinal: true },
     });
 
-    return succeed({ turnId: turn.id });
+    return succeed({ turnId: turn.id, ordinal: turn.ordinal });
   });
 
 /**

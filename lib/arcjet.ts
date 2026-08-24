@@ -9,8 +9,24 @@ import arcjet, {
 } from "@arcjet/next";
 
 /**
- * Arcjet sits in front of the model-call route, before OpenRouter is ever
- * touched, so anything denied here costs us nothing downstream.
+ * Arcjet sits in front of both write paths — submitting a prompt, and each
+ * model call it turns into — before OpenRouter is ever touched, so anything
+ * denied here costs us nothing downstream.
+ *
+ * **Two clients over one base, because the two paths are not the same request.**
+ * Shield and bot detection apply to both: both are endpoints a script can find.
+ * The other two rules each belong to exactly one:
+ *
+ * - **Prompt-injection detection belongs to submitting a prompt.** One prompt
+ *   becomes three model calls, so screening at the call site screened the same
+ *   text three times: three times a metered add-on's token cost for one
+ *   question, and three independent chances to reach different conclusions
+ *   about it. Screening once, where the prompt is actually submitted, also
+ *   means a flagged prompt never creates a turn at all rather than creating one
+ *   and then refusing it three times.
+ * - **The token bucket belongs to the model call**, because that is where the
+ *   real cost is. Spending the whole turn's budget up front would leave a known
+ *   `turnId` re-postable for free.
  *
  * The bucket is the part worth understanding. Our transport is one HTTP request
  * per model, so a prompt sent to three models is three requests. A plain
@@ -30,7 +46,7 @@ import arcjet, {
  * cafe behind one NAT no longer shares a single allowance. The id comes from
  * `auth()` on the server and is never read from a client-supplied header.
  */
-export const aj = arcjet({
+const base = arcjet({
   // The one sanctioned direct read of a secret, and the reason it exists: this
   // runs at module scope, and `next build` evaluates route modules, so reaching
   // for a validated key here would make building the app require a live secret.
@@ -47,19 +63,22 @@ export const aj = arcjet({
   // long enough for the analysis to actually return, and it is spent before a
   // model call that already takes far longer than that.
   client: createRemoteClient({ timeout: 5_000 }),
-  rules: [
-    shield({ mode: "LIVE" }),
-    detectBot({ mode: "LIVE", allow: [] }),
-    detectPromptInjection({ mode: "LIVE" }),
-    tokenBucket({
-      mode: "LIVE",
-      characteristics: ["userId"],
-      capacity: 30,
-      refillRate: 10,
-      interval: "1m",
-    }),
-  ],
+  rules: [shield({ mode: "LIVE" }), detectBot({ mode: "LIVE", allow: [] })],
 });
+
+/** Submitting a prompt: screened once, here, before a turn exists. */
+export const ajStartTurn = base.withRule(detectPromptInjection({ mode: "LIVE" }));
+
+/** One model call, spending one token of this person's budget. */
+export const ajModelCall = base.withRule(
+  tokenBucket({
+    mode: "LIVE",
+    characteristics: ["userId"],
+    capacity: 30,
+    refillRate: 10,
+    interval: "1m",
+  }),
+);
 
 /** One model call spends one token. */
 export const TOKENS_PER_MODEL_CALL = 1;

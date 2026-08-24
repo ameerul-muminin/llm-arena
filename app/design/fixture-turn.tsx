@@ -8,11 +8,14 @@ import { cn } from "@/lib/utils";
 import { deriveAt, FIXTURES, FIXTURE_END_MS, FIXTURE_SCALE_MS } from "./fixtures";
 
 /**
- * The fixture turn, running. Placeholder until feature 6 streams for real.
+ * The fixture turn, running — on the design reference page, and nowhere else.
  *
- * Everything about the *shape* here is what the real turn will be: one prompt,
- * a card per model on one shared time scale, picking unavailable until two or
- * more models have actually answered. Only the source of the tokens is fake.
+ * The real arena streams for real now, so this is no longer standing in for
+ * anything. It stays because it is the only way to look at the three states
+ * that are awkward to catch by hand — a model that streams, one that thinks and
+ * then flushes in a single chunk, and one that fails partway — all at once, on
+ * demand, with a replay button. It moved out of `features/arena/` and next to
+ * the page that shows it, since that page is now its only caller.
  */
 
 type FixtureTurnProps = {

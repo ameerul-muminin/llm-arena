@@ -58,20 +58,58 @@ const didStream = (deltaCount: number, generationMs: number | null): boolean =>
   generationMs !== null &&
   generationMs >= MIN_GENERATION_MS_TO_MEASURE_RATE;
 
+/**
+ * Whether the thinking/writing split the provider reported can actually be
+ * true.
+ *
+ * It is not always. Measured live: a model reported 361 output tokens of which
+ * 387 were reasoning, and the split arrived as **negative twenty-six written
+ * tokens**. A card would have printed `-26` under "Written", which is precisely
+ * the kind of number this project exists not to print.
+ *
+ * When the two halves cannot both be true there is no way to tell which one is
+ * wrong, so neither is kept. That is the same rule as everywhere else here: a
+ * number we cannot stand behind is `null`, and `null` renders as an em dash.
+ */
+const splitIsCoherent = (
+  outputTokens: number | null,
+  reasoningTokens: number | null,
+  textTokens: number | null,
+): boolean => {
+  if (textTokens !== null && textTokens < 0) return false;
+  if (reasoningTokens !== null && reasoningTokens < 0) return false;
+  if (outputTokens !== null && reasoningTokens !== null && reasoningTokens > outputTokens) {
+    return false;
+  }
+  return true;
+};
+
 export const computeMetrics = (timings: Timings, tokens: TokenCounts): ModelMetrics => {
   const outputTokens = finite(tokens.outputTokens);
   const inputTokens = finite(tokens.inputTokens);
-  const textTokens = finite(tokens.textTokens);
   const totalMs = timings.finishedAt - timings.startedAt;
+
+  const coherent = splitIsCoherent(
+    outputTokens,
+    finite(tokens.reasoningTokens),
+    finite(tokens.textTokens),
+  );
+  const textTokens = coherent ? finite(tokens.textTokens) : null;
+  const reasoningTokens = coherent ? finite(tokens.reasoningTokens) : null;
 
   /**
    * Generation speed must divide by the tokens that actually arrived in that
    * window. A reasoning model does its thinking before it writes a word, so
    * those tokens exist nowhere in the streamed span — counting them against it
    * inflated one real measurement here roughly ninefold. Fall back to the total
-   * only when the provider does not report the split.
+   * only when the provider does not report the split at all.
+   *
+   * A split that was reported but cannot be true is a third case, and it gets
+   * no speed rather than the fallback: if the thinking figure is wrong then so
+   * is any estimate of how much of the output was actually written, and
+   * dividing by the whole output would resurrect the ninefold inflation.
    */
-  const streamedTokens = textTokens ?? outputTokens;
+  const streamedTokens = coherent ? (textTokens ?? outputTokens) : null;
 
   const generationMs =
     timings.firstDeltaAt !== null && timings.lastDeltaAt !== null
@@ -94,7 +132,7 @@ export const computeMetrics = (timings: Timings, tokens: TokenCounts): ModelMetr
     endToEndTokensPerSecond: perSecond(outputTokens, totalMs),
     inputTokens,
     outputTokens,
-    reasoningTokens: finite(tokens.reasoningTokens),
+    reasoningTokens,
     textTokens,
     totalTokens:
       finite(tokens.totalTokens) ??

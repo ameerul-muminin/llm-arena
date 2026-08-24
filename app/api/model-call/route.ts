@@ -11,8 +11,10 @@ import {
 } from "@/features/model-call/protection";
 import { parseModelCallRequest } from "@/features/model-call/request";
 import { toEventStreamResponse, toRefusalResponse } from "@/features/model-call/stream-response";
-import type { ModelCallEvent } from "@/features/model-call/types";
-import { aj, TOKENS_PER_MODEL_CALL } from "@/lib/arcjet";
+import { conversationFor } from "@/features/thread/conversation";
+import { findThread, findTurnOwner } from "@/features/thread/queries";
+import { recordAndTrack } from "@/features/thread/record-call";
+import { ajModelCall, TOKENS_PER_MODEL_CALL } from "@/lib/arcjet";
 import { getPostHogClient } from "@/lib/posthog-server";
 
 /**
@@ -21,55 +23,14 @@ import { getPostHogClient } from "@/lib/posthog-server";
  * Three models answering means three calls to this route, each with its own
  * connection and its own abort signal, so one failing or hanging is invisible
  * to the other two. Nothing here is ever multiplexed.
+ *
+ * The body is two ids. The conversation is assembled here, from the stored
+ * thread, rather than being sent by the browser — the server already holds
+ * every prompt and every answer, and a history arriving from the client would
+ * be a forgeable second copy of it.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/**
- * Wraps the model call generator to capture server-side PostHog events
- * for completion and failure without buffering the full response.
- */
-async function* withPostHogTracking(
-  events: AsyncGenerator<ModelCallEvent, void>,
-  modelId: string,
-  distinctId: string,
-): AsyncGenerator<ModelCallEvent, void> {
-  const posthog = getPostHogClient();
-  for await (const event of events) {
-    yield event;
-    if (event.type === "done" && posthog) {
-      posthog.capture({
-        distinctId,
-        event: "server_model_call_completed",
-        properties: {
-          model_id: modelId,
-          total_ms: event.metrics.totalMs,
-          input_tokens: event.metrics.inputTokens,
-          output_tokens: event.metrics.outputTokens,
-          total_tokens: event.metrics.totalTokens,
-          reasoning_tokens: event.metrics.reasoningTokens,
-          text_tokens: event.metrics.textTokens,
-          tokens_per_second: event.metrics.tokensPerSecond,
-          end_to_end_tokens_per_second: event.metrics.endToEndTokensPerSecond,
-          streamed: event.metrics.streamed,
-          delta_count: event.metrics.deltaCount,
-        },
-      });
-      await posthog.flush();
-    } else if (event.type === "error" && posthog) {
-      posthog.capture({
-        distinctId,
-        event: "server_model_call_failed",
-        properties: {
-          model_id: modelId,
-          failure_kind: event.failure.kind,
-          retryable: event.failure.retryable,
-        },
-      });
-      await posthog.flush();
-    }
-  }
-}
 
 export async function POST(request: NextRequest): Promise<Response> {
   const body: unknown = await request.json().catch(() => null);
@@ -93,18 +54,34 @@ export async function POST(request: NextRequest): Promise<Response> {
   // limit refer to the same someone across devices and sessions.
   const distinctId = userId;
 
-  // Arcjet runs before anything reaches OpenRouter: shield, bot detection,
-  // prompt-injection detection on the newest user message, and one token off
-  // this user's bucket for this single model call. A denied request never
-  // costs us a provider call.
-  const latestUserMessage =
-    [...parsed.request.messages].reverse().find((message) => message.role === "user")?.content ??
-    "";
+  // The cheap checks first, before anything is spent: does this turn exist, is
+  // it this person's, and is this model actually in the thread's line-up. That
+  // last one is where the locked line-up is really enforced — the composer
+  // stops offering the control, this refuses the request.
+  const owner = await findTurnOwner(parsed.request.turnId);
 
-  const decision = await aj.protect(request, {
+  if (owner?.ownerId !== userId) {
+    console.warn(
+      `[model-call] refused turn=${parsed.request.turnId} reason=${owner === null ? "no-such-turn" : "not-owner"}`,
+    );
+    return toRefusalResponse({ type: "error", failure: failure("blocked") }, 403);
+  }
+
+  const thread = await findThread(owner.threadId);
+
+  if (thread?.modelIds.includes(parsed.request.modelId) !== true) {
+    console.warn(
+      `[model-call] refused turn=${parsed.request.turnId} model=${parsed.request.modelId} reason=not-in-lineup`,
+    );
+    return toRefusalResponse({ type: "error", failure: failure("blocked") }, 403);
+  }
+
+  // Arcjet runs before anything reaches OpenRouter: shield, bot detection, and
+  // one token off this person's bucket for this single model call. Prompt
+  // screening already happened once, where the prompt was submitted.
+  const decision = await ajModelCall.protect(request, {
     userId,
     requested: TOKENS_PER_MODEL_CALL,
-    detectPromptInjectionMessage: latestUserMessage,
   });
 
   // Any rule that could not be evaluated failed open, meaning the request
@@ -142,14 +119,22 @@ export async function POST(request: NextRequest): Promise<Response> {
         arcjet_reason: decision.reason.type,
       },
     });
+    // No `ModelResponse` row: a row records what happened to a model call, and
+    // this call never happened. The consequence is written down in scope —
+    // re-opening the thread shows that model simply absent from the turn.
     return toRefusalResponse({ type: "error", failure: outcome.failure }, outcome.status);
   }
 
   return toEventStreamResponse(
-    withPostHogTracking(
-      callModel(parsed.request, request.signal),
-      parsed.request.modelId,
-      distinctId,
+    recordAndTrack(
+      callModel(
+        {
+          modelId: parsed.request.modelId,
+          messages: conversationFor(thread, parsed.request.modelId),
+        },
+        request.signal,
+      ),
+      { turnId: parsed.request.turnId, modelId: parsed.request.modelId, distinctId },
     ),
   );
 }

@@ -2,12 +2,11 @@
 
 import { PanelLeft } from "lucide-react";
 import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { FIXTURE_STANDINGS, FIXTURE_THREAD_TITLE } from "./fixtures";
 import { isCurrent, NAV_ITEMS } from "./nav";
-import { ThreadStandings } from "./standings";
 
 /**
  * The bar that stays put while the answers scroll under it.
@@ -18,7 +17,10 @@ import { ThreadStandings } from "./standings";
  *
  * Standings only appear where there is a thread to have standings in. On the
  * leaderboard or the models list they would be a record of something you are
- * not looking at.
+ * not looking at — so the bar does not go looking for them. They arrive as a
+ * slot, rendered by whichever route is open below, which is the only way this
+ * component can show a fact about a segment nested inside it without being
+ * told by the client after the fact.
  */
 
 const SidebarToggle = () => {
@@ -43,33 +45,27 @@ const SidebarToggle = () => {
   );
 };
 
-export const TopBar = () => {
+type TopBarProps = {
+  /** Whatever the open route wants in the bar. Empty on most of them. */
+  readonly thread: ReactNode;
+};
+
+export const TopBar = ({ thread }: TopBarProps) => {
   const pathname = usePathname();
   const section = NAV_ITEMS.find((item) => isCurrent(item, pathname));
-  const onThread = pathname === "/" || pathname.startsWith("/thread/");
 
   return (
     <header className="sticky top-0 z-10 border-b border-line bg-ground/85 backdrop-blur-sm">
       <div className="flex h-14 items-center gap-3 px-3 sm:px-4">
         <SidebarToggle />
 
-        <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
-          <ol className="flex min-w-0 items-center gap-2">
-            <li className="shrink-0 text-detail text-ink-muted">{section?.label ?? "Arena"}</li>
-            {onThread && (
-              <>
-                <li aria-hidden="true" className="shrink-0 text-ink-muted">
-                  /
-                </li>
-                <li className="min-w-0 truncate text-detail font-medium text-ink">
-                  {FIXTURE_THREAD_TITLE}
-                </li>
-              </>
-            )}
+        <nav aria-label="Breadcrumb" className="shrink-0">
+          <ol className="flex items-center gap-2">
+            <li className="text-detail text-ink-muted">{section?.label ?? "Arena"}</li>
           </ol>
         </nav>
 
-        {onThread && <ThreadStandings standings={FIXTURE_STANDINGS} />}
+        <div className="flex min-w-0 flex-1 items-center gap-2">{thread}</div>
       </div>
     </header>
   );

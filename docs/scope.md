@@ -16,17 +16,17 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 
 ## At a glance
 
-| #   | Feature                                     | Phase      | Status                        |
-| --- | ------------------------------------------- | ---------- | ----------------------------- |
-| 1   | Connecting to a model                       | Foundation | done                          |
-| 2   | Coding standards & tooling                  | Foundation | done                          |
-| 3   | Data model                                  | Foundation | done                          |
-| 4   | Design & look                               | Foundation | done                          |
-| 5   | Model picker                                | Slice 1    | not started                   |
-| 6   | Send a prompt, parallel streams, and voting | Slice 1    | Arcjet done, rest not started |
-| 7   | App shell & thread history                  | Slice 2    | done                          |
-| 8   | Public thread visibility & sharing          | Slice 3    | not started                   |
-| 9   | Leaderboard: global & personal              | Slice 4    | not started                   |
+| #   | Feature                                     | Phase      | Status      |
+| --- | ------------------------------------------- | ---------- | ----------- |
+| 1   | Connecting to a model                       | Foundation | done        |
+| 2   | Coding standards & tooling                  | Foundation | done        |
+| 3   | Data model                                  | Foundation | done        |
+| 4   | Design & look                               | Foundation | done        |
+| 5   | Model picker                                | Slice 1    | done        |
+| 6   | Send a prompt, parallel streams, and voting | Slice 1    | done        |
+| 7   | App shell & thread history                  | Slice 2    | done        |
+| 8   | Public thread visibility & sharing          | Slice 3    | not started |
+| 9   | Leaderboard: global & personal              | Slice 4    | not started |
 
 ## Verification pass, 2026-08-17
 
@@ -421,8 +421,132 @@ Feature 4 is done bar that last check. What it deliberately does not include: no
 
 An "Add model" popover pulling OpenRouter's live free-tier list, sorted by context window, capped at three models, defaulting to all three selected, with removable chips next to the prompt box. Also render that same catalog as a simple `/models` page, name, context window, and pricing for each one, so anyone can browse the full list without opening the picker.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### Decided
+
+**The catalogue is fetched on the server, never by the browser.** One `features/catalogue/` module owns `getFreeModels()`, cached through Next's own `fetch` revalidation at an hour. That gives one cache shared by every visitor rather than one request per person, keeps a third-party URL off the client, and means the picker and `/models` read the identical function, so they cannot disagree about what is free. Verified before deciding: the endpoint takes no API key, returns the whole list in one response, and has no pagination.
+
+**The response is untrusted input and gets parsed like it.** A pure parser over `unknown` keeps only entries whose fields are the right shape and drops the rest, exactly the posture `wire.ts` takes on the provider's stream and `request.ts` takes on a request body. Someone else's server changing a field name should thin our list, never crash a page.
+
+**"Free" means the price is zero, not that the slug ends in `:free`.** Checked against the live list and the two are genuinely different: 19 models cost nothing, only 15 carry the suffix. Pricing is the fact behind the `$0.0000` this app prints on every card, so pricing is what the filter reads. Two further exclusions, both for honesty rather than taste:
+
+- **Text in, text out only.** The zero-price set includes Lyria, which emits audio. It would arrive in the arena as a card that never produces readable text.
+- **`openrouter/free` is excluded, because it is a router, not a model.** It forwards to whichever free model it likes. A leaderboard row for it would claim a win rate for a name that is several models wearing one label, which is precisely the kind of number this project refuses to print.
+
+**The default three are the top of the context sort, one per vendor.** Walk the sorted list and skip a vendor already taken. Fully deterministic and still exactly the sort the scope names — the tiebreak only decides between models that were otherwise adjacent. The reason it earns its keep is visible on today's list: a flat top-three returns two NVIDIA Nemotrons, and a bench where two of three instruments come from the same lab is a weaker comparison for no gain. A thread you remember as "Gemma against Qwen" is the thing the sidebar row design already bet on.
+
+**No new API route, and no spinner inside the popover.** The arena page is a server component and hands the catalogue to the client composer as a prop. The list is a fact about the page, known before it renders, so making the browser ask for it separately would add a loading state, a fetch, and a route for nothing.
+
+**A failed catalogue fetch degrades, it does not break.** The page still renders, the picker states in one plain sentence that the list could not be loaded and offers a retry, and the real reason goes to the server log only — the same rule every other failure in this app already follows. Nothing hardcoded gets substituted in: showing a stale trio while claiming it is the live list is worse than saying the list is unavailable.
+
+**Provider names get parsed once, in one pure function.** OpenRouter returns `"NVIDIA: Nemotron 3 Ultra (free)"`; the app wants vendor `NVIDIA` and name `Nemotron 3 Ultra`. Splitting that at the call site would put string surgery in three components. A slug the catalogue does not know falls back to rendering the slug itself, never a blank — a thread saved before a model stopped being free still has to read as something.
+
+**`/models` and the picker share the data, not the presentation.** The page keeps its card grid, the popover keeps its list; both read `getFreeModels()`. Feature 5's real work is swapping the source and deleting both fixture blocks, since the cap at three, the chips, and their removal were built as real rules in feature 7 rather than as placeholders.
+
+**No search box.** Fifteen models fit in a popover. A filter input over a list that short is furniture.
+
+**`/api/model-call` is not changed to validate the slug against the live catalogue.** It would put a network hop in front of every model call to re-check something the picker already constrained, and feature 6 already maps a dead slug to `unavailable` — OpenRouter answers 404 both for a slug that never existed and for one that stopped being free. The `vendor/model[:tag]` regex stays the gate.
+
+**The rot this feature exists to fix is already measurable.** Of the three slugs hardcoded in the current fixtures, `qwen/qwen3-14b:free` and `meta-llama/llama-3.3-8b-instruct:free` are both gone from the live free list; only `google/gemma-4-31b-it:free` survives. That is on top of the two models feature 6 already watched stop being free. Any hand-written list in this app is wrong within weeks.
+
+#### What the build turned out to be
+
+Every decision above shipped as written. One of them was quietly broken by the
+framework in a way no amount of reading the code would have shown, and finding it
+is the reason this feature took a production server rather than a dev one.
+
+**The retry button did not retry, and both pages had to stop being static.** With
+the pages left to prerender, `next build` rendered them once, at build time, and
+every request for the next hour was served that HTML. Measured on a production
+server against a catalogue stand-in that answered 500: three requests to
+`/models` produced **zero** outbound attempts. The failure had been baked in at
+build time, and `router.refresh()` re-served the identical bytes. So a build that
+happened while OpenRouter was unreachable would have shipped "the model list
+didn't load" to everyone for an hour, under a button promising otherwise. A retry
+that cannot retry is worse than no retry, because it looks like one.
+
+Both routes now set `dynamic = "force-dynamic"`, with the reason written once in
+`catalogue.ts` and pointed at from each page. **Crucially this costs nothing that
+the plan actually wanted**, and that was measured rather than assumed, because the
+cache being relied on is the fetch's and not the route's:
+
+- Four renders across the two routes, catalogue answering normally → **one**
+  upstream call. The hour-long cache is still shared by every visitor.
+- Four renders, catalogue answering 500 → **four** upstream calls. A failed
+  response is never stored, so `Try again` genuinely tries again.
+
+**The Data Cache also survives a rebuild**, which briefly made a test lie: the
+second run was still serving the first run's cached payload until
+`.next/cache/fetch-cache` was cleared by hand. Worth knowing before trusting any
+future measurement of this path.
+
+**"Free means zero" is not a pedantic distinction, it is four extra models and
+three exclusions.** Live numbers: 19 models priced at zero, only 15 carrying the
+`:free` suffix. After the filters, **16 render** — the two Lyria music models drop
+on output modality, `openrouter/free` drops as a router, and one zero-price model
+with no suffix is correctly kept. Vendor spread on the day: NVIDIA 5, Google 2,
+Poolside 2, Thinking Machines 2, and one each from Cohere, Dots Studio, LiquidAI,
+Z.ai, and an anonymised preview model.
+
+**One model has no vendor, and it reads lowercase.** OpenRouter names most models
+`"NVIDIA: Nemotron 3 Ultra (free)"`, and the parser splits that. A cloaked preview
+model is named just `"Ox Alpha"`, so there is no vendor to split off and the
+fallback prints the slug's own vendor segment — `stealth`, in lowercase, next to
+`NVIDIA` and `Google`. Left as it is, deliberately: title-casing it would invent a
+proper name for a vendor that has not given one, and this project prints the name
+it has. Worth knowing that it is also currently the **first** default pick, since
+it happens to advertise the largest context window on the list.
+
+**The default selection's vendor rule earns itself on the live data.** A flat
+top-three returns two NVIDIA Nemotrons; one-per-vendor opens the arena with three
+different labs. Confirmed in the rendered HTML, not in principle.
+
+**The picker states the context window it sorts by.** A list ordered by an
+invisible number looks arbitrary, so the number is on every row, right-aligned
+under a `Context` column label, in mono like every other measured fact. That is
+the whole visual addition this feature makes — feature 4's signature is the shared
+time axis, and inventing a second signature here would dilute it.
+
+**Deleting `.next` breaks the typecheck, and `pnpm check` cannot fix itself.**
+Feature 7 already recorded that a stale `.next` fails `tsc` on a route that no
+longer exists — that recurred here when the throwaway route was deleted. The new
+half is worse: clearing `.next` to fix it makes `tsc` fail on `LayoutProps`, which
+Next generates into `.next/types`. Since `pnpm check` runs the typecheck before
+the build, a clean checkout needs one `pnpm build` before the gate can pass at
+all. Written up in `coding-standards.md`.
+
+**The failure path was verified by hand, not reasoned about.** A throwaway route
+stood in for OpenRouter — the same pattern feature 3 used, deleted after the run.
+Both screens print the plain sentence and a `Try again`, no card grid, no chips,
+no `Add model` control, and the real reason (`OpenRouter answered 500.`) appears
+in the server log only. No status code and no provider text reaches the HTML.
+
+Files: `features/catalogue/` (`types.ts`, `parse.ts`, `catalogue.ts`,
+`selection.ts`, `copy.ts`, `retry.tsx`), with `features/arena/composer.tsx`,
+`app/(app)/page.tsx`, and `app/(app)/models/page.tsx` rewired to it. The
+hand-written catalogue on `/models` is gone along with its `PlaceholderNote`, and
+the composer no longer reads `features/arena/fixtures.ts` — that module now serves
+only the fixture turn, which is feature 6's to delete.
+
+`features/catalogue/` imports nothing from another feature except `formatTokens`
+and `ModelMark` from `features/design/`, which is the same one-way contract rule
+features 3 and 4 established, pointing the same way.
+
+- [x] Decide the approach
+- [x] `features/catalogue/`: typed catalogue entry, pure parser, pure name/vendor formatter
+- [x] `getFreeModels()` — server-only fetch, hour-long revalidate, zero-price + text-only + no-router filter, sorted by context window
+- [x] Default selection: top three by context, one per vendor
+- [x] Composer reads the live catalogue through a prop; the fixture model list retired
+- [x] `/models` renders the live catalogue; its fixture block and `PlaceholderNote` deleted
+- [x] Unavailable-catalogue state: plain sentence, retry, real reason logged server-side only
+- [x] Found and fixed a retry button that could not retry, because both pages were being prerendered
+- [x] Verified live: 16 models, the count line agreeing, three distinct vendors chosen by default
+- [x] Verified by hand with the catalogue forced to fail, on a production server
+- [x] Typecheck, lint, format, and a real build all clean
+- [ ] Open the picker in a real browser and tab through it in both themes: the popover scrolls, every row takes focus with a visible ring, escape closes it and returns focus to `Add model` — needs a person
+
+Feature 5 is done bar that last check. What it deliberately does not include:
+sending the prompt. The chips are now the real, live models a turn will be sent
+to, but the send control is still disabled and still says so — that is feature 6.
 
 ### 6. Send a prompt, parallel streams, and voting
 
@@ -463,11 +587,188 @@ Also: `meta-llama/llama-3.3-70b-instruct:free` stopped being free and 404s. The 
 
 Every prompt sent, every answer finishing, and every vote cast should be tracked as a real PostHog event, so there's an honest funnel from prompt to answer to vote. A model failing should also be logged properly on the server, not just shown to the user and forgotten. Separately from that funnel, every actual model call should also be wrapped so PostHog captures its own real tokens, cost, and latency per call, that's PostHog's own LLM analytics, not the same thing as the funnel events or the numbers already shown on the response card.
 
+#### Decided: the rest of the feature
+
+**A turn exists before any model is called, and the browser is only ever told its id.** Feature 3 already settled that the thread and turn are one write up front, so three parallel requests cannot race to create the same turn. That write becomes a server action, `startTurn`, doing one of two things: `createThread` on the arena's empty screen, `appendTurn` on a thread that already exists. It returns `{ threadId, turnId }` and nothing else.
+
+**The model-call route takes `{ turnId, modelId }` and works out the messages itself.** The browser stops sending conversation history entirely. `conversationFor(thread, modelId)` is already built, already verified, and already the definition of "this model's own separate conversation" — having the client send a history the server could just read is a second copy of the truth that can disagree with the stored one, and it lets a caller put words in a model's mouth by claiming it said something it never did. It costs one thread read per model call, three reads against a prompt that takes seconds. `request.ts` narrows to a `turnId` and a `modelId`, and the route refuses a turn whose thread belongs to someone else via `findTurnOwner`, before spending anything.
+
+**Prompt-injection detection moves to `startTurn`; every other Arcjet rule stays on the per-model route.** One prompt currently gets screened three times, because three model calls carry it. That is three times a metered add-on's token cost for one question, and three independent chances to reach different conclusions about the same text — the accuracy problem already written up above, made three times more visible for no gain. Screening once, where the prompt is actually submitted, also means a flagged prompt never creates a turn at all rather than creating one and then refusing it three times. The token bucket stays per model call, because that is where the real cost is and because a bucket spent at turn creation would leave a known `turnId` re-postable for free. Shield and bot detection stay on both, since both are endpoints.
+
+**A refusal that never reached a model writes no row.** A `ModelResponse` records what happened to a model call; if there was no call, there is nothing to record about the model. The consequence is stated rather than hidden: if the bucket is empty, the turn is created, all three calls are refused, and re-opening that thread later shows a prompt with no answers under it. That is the same family as feature 3's known gap for a browser disconnecting mid-stream, and it is preferable to writing rows that blame three models for a limit the person hit.
+
+~~**Streaming happens in place, and the URL catches up afterwards with `history.replaceState`.**~~ Wrong, and replaced during the build — see "What the build turned out to be" below. The empty arena creates the thread and then navigates; the answers stream on the far side of that navigation.
+
+**Voting is by `(turnId, modelId)`, never by a response id.** The client never learns a `ModelResponse` id, because putting one on the wire would mean adding a thread-shaped event to `ModelCallEvent`, and `model-call` is not allowed to know threads exist — that one-way rule is the whole reason features 3, 4, and 5 could import its contract safely. The vote action takes the turn and the model, resolves the row through the unique `(turnId, modelId)` index, and hands `castVote` the id. Every refusal `refusals.ts` already writes a sentence for is surfaced as that sentence.
+
+**The model line-up locks once the first prompt is sent.** After that the chips are a readout of who is in this thread, not a control; changing the cast means a new thread. A thread is one sample run on a fixed set of instruments, which is what makes the top bar's win records describe a stable group and what keeps a follow-up a genuine like-for-like comparison. It also avoids the lopsided history a late joiner would get — `conversationFor` correctly hands it every earlier prompt with no answers attached, which is honest, but it is not a comparison anyone asked for.
+
+**Retry is per card and replaces, it does not append.** `recordAnswer` and `recordFailure` already upsert on `(turn, model)` precisely so a second attempt overwrites the first. The card's `onRetry` re-dispatches that one model against the same turn; the other two are untouched, which is the entire point of one request per model.
+
+**Titles are not generated.** `Thread.title` stays null and every surface falls back to the first prompt, truncated. Asking a model to name a thread would spend a call, add a failure mode, and put an invented sentence where a real one already exists.
+
+**The sidebar and the top bar stop being fixtures, and one query has to grow.** `features/shell/fixtures.ts` is deleted whole. The sidebar reads `listThreadsForOwner`, which currently returns only `ThreadSummary` — feature 7's row design also needs the models that were in a thread and its turn count, so the query gains both. The top bar's title and standings are server facts about a nested route the shell layout cannot see, so they arrive through a parallel-route slot: `app/(app)/@thread/thread/[id]/page.tsx` renders them and `@thread/default.tsx` renders nothing for every other route. A client store seeded from an effect was rejected — it flashes empty on first paint, and it is the same set-state-in-effect shape this project has already had to unpick three times. A cast vote calls `router.refresh()`, which is cheap because it happens at most once per turn.
+
+**One hook owns a live turn.** `features/arena/` gets the state: a map of `modelId` to `AnswerState`, a per-model `AbortController`, the dispatch-time clock each `AxisSpan` needs, and a `requestAnimationFrame` tick that runs only while at least one model is still going, so elapsed time advances on the axis between deltas. `axisScaleFor` over the live spans gives the shared scale, so the signature works while the race is happening rather than only after it. Reduced motion skips the tick and renders on events alone. `AnswerCard`, `TimeAxis`, and `MetricsRow` are unchanged — they already take exactly this shape, which is what feature 4 built them against.
+
+**Signed-out visitors see the composer and are asked to sign in by it.** The route already refuses with `sign-in-required` and that stays as the real enforcement, but a send control that fails after the fact is worse than one that says what it needs up front.
+
+**PostHog: the funnel is captured server-side, and `$ai_generation` is emitted from the numbers already measured.** Prompt sent, answer finished, model failed, and vote cast all happen in server code that already holds the Clerk id, so capturing there keeps the funnel out of reach of an ad blocker and keeps one identity across devices. LLM analytics gets `$ai_generation` events built from `ModelMetrics` rather than from `@posthog/ai`'s wrapper: this app measures time-to-first-token, generation speed, and the reasoning/text token split itself, deliberately, with rules about when it refuses to report one at all — and a wrapper reporting its own version of those numbers would be a second source for a figure that already has one. Cost is sent as `0`, which is true, and is the same number the cards print.
+
+**Deliberately not in this feature.** No stop button mid-stream, no regenerate-all, no editing a sent prompt, and no resuming a stream after a reload — a reload shows whatever rows were written and no more. Each is a real product decision that would need its own thinking, and none is required for a prompt to reach three models and get judged.
+
+#### What the build turned out to be
+
+Most of the plan shipped as written. Two decisions did not survive contact with
+the rest of the app, and running it surfaced a real honesty bug in feature 1's
+metrics that no amount of reading would have shown.
+
+**The empty arena navigates before it streams, and the plan above was wrong.**
+`history.replaceState` rewrites the address without telling the server anything,
+which is exactly the problem: the top bar's standings, the sidebar's thread
+list, and the page's own data are all server-rendered, so after a shallow URL
+change every one of them would still be describing a thread that, as far as they
+knew, did not exist. Worse, the model line-up would have had nowhere to live —
+the new screen has to know who to ask, and a turn with no responses yet cannot
+say. So the empty arena calls `startTurn`, navigates to
+`/thread/<id>?live=<turnId>`, and the thread screen dispatches. The cost is one
+server round trip before the first call, and it is paid where nothing measures
+it: time-to-first-token starts at dispatch on the server, on the far side of the
+navigation.
+
+`?live=` is then stripped from the address with `replaceState` as soon as the
+calls are away, and it is honoured only for the thread's owner and only while
+that turn genuinely has no answers. Otherwise a pasted link would re-ask a
+finished thread's last question, and every reload would spend three more calls.
+
+**The line-up became a real column, `Thread.modelIds`.** It was going to be
+inferred from whichever `ModelResponse` rows existed. That is fine for reading a
+finished thread and useless at the only moment it matters — dispatch, when there
+are no responses yet. It is also lossy: a turn where every call was refused
+before it reached a model would leave a thread with no idea who was in it. Since
+today's decision fixes the line-up at creation, it is a property of the thread,
+and storing it is what makes the lock real rather than implied. The route
+re-checks every request against it, which is where the lock is actually
+enforced — the composer merely stops offering the control.
+
+**One prompt was being screened for injection three times.** Moving
+`detectPromptInjection` onto the submit action and leaving the token bucket on
+the model call needed two Arcjet clients over one base — shield and bot
+detection on both, one extra rule each. Worth stating plainly what this saves,
+since prompt scanning is metered: a three-model prompt now pays for one scan
+instead of three, and there is one verdict on a given piece of text rather than
+three that can disagree.
+
+**A model reported minus twenty-six written tokens.** Measured live, twice, from
+two different vendors: `outputTokens` 361, of which `reasoningTokens` 387 — a
+thinking figure larger than the whole output, which the SDK turns into a
+`textTokens` of **-26**. The card would have printed `-26` under "Written". The
+number that was actually wrong is unknowable from here, so neither half of the
+split is kept: `metrics.ts` now checks that the split can be true at all and
+nulls both when it cannot, which renders as the em dash every other missing
+number already uses.
+
+Generation speed goes with it, deliberately. The obvious move is to fall back to
+dividing by `outputTokens`, and that is exactly the ninefold inflation feature 1
+already fixed once — if the thinking figure is wrong, no estimate of how much of
+the output was written survives it. Overall throughput still stands, because it
+divides everything produced by the whole wait and never needed the split.
+Confirmed on a model that reports a coherent split: 23 written tokens, 0
+thinking, `18.4 tok/s` generation — the guard only bites on the broken case.
+
+**OpenRouter answers 400, not 404, for a slug it does not recognise at all.**
+Feature 6's earlier note recorded 404 for a model that stopped being free, which
+is still right. A slug that was never valid returns `400 ... is not a valid model
+ID`, which maps to `unknown` — "Something went wrong reaching that model."
+Deliberately left there: a 400 can equally mean a request we got wrong, and
+claiming "that model isn't available" for every one of them would be inventing a
+diagnosis. Written down because the two codes look interchangeable and are not.
+
+**The recording wrapper moved out of the route.** `route.ts` was carrying the
+generator that writes the row and captures the analytics, which is not what
+feature 1 says a route handler is for — its job is turning events into a
+`Response`. It lives in `features/thread/record-call.ts` now, which also made it
+callable from the verification harness, so what was exercised by hand is the
+same function the route runs rather than a copy of it.
+
+**`features/shell/fixtures.ts` is gone; the arena's fixture turn moved rather
+than died.** The design reference page is the only thing that still wants a fake
+turn, and it wants it for a reason that has not expired: a model that streams,
+one that buffers and flushes, and one that fails partway, all on screen at once,
+on demand, with a replay button. It moved to `app/design/` beside its only
+caller. The thread and standings fixtures were deleted outright — those are real
+now.
+
+**Verified by hand, against a running server and the real Postgres**, through a
+throwaway route deleted afterwards — the same pattern features 3 and 5 used:
+
+- Three models dispatched at once against one turn: two answered (29 and 10
+  chunks), one failed, and the failure was invisible to the other two.
+- Metrics stored and read back: `ttft=1315ms`, generation `18.7 tok/s`, overall
+  `10.2 tok/s`, written 30, thinking 0 — and em dashes where the broken split
+  was refused.
+- The vote round trip: `findResponseId` resolves `(turn, model)` to the right
+  row, the vote lands, a second vote is refused with "You've already picked a
+  winner for this prompt", and a stranger's vote with "This conversation belongs
+  to someone else".
+- Follow-up histories are each model's own: `user>assistant>user` for the two
+  that answered, `user>user` for the one that failed — asked twice, answered
+  once, with nothing invented in between.
+- Retrying the failed model wrote **one** row, not two.
+- Standings derived from real votes: `1/1` for the winner, `0/1` for the other
+  answerer, `0/0` for the model that never answered.
+- The sidebar row carries the first prompt as its title, three models, two turns.
+- `/thread/<id>` served 200 to a **signed-out** reader with both prompts, the
+  winner badge, `won 1 of 1` in the top bar from the parallel-route slot, the
+  failed card's plain sentence, and the composer replaced by "you can read it but
+  not add to it". Fourteen em dashes on the page, every one of them a number the
+  app declined to invent.
+- Refusals on the endpoint: signed-out `POST` → 401 with `sign-in-required`
+  carried as a normal one-event stream; a body still carrying `messages` → 400
+  `Expected \`turnId\` to be an id.`
+- Typecheck, lint, format, and a real production build all clean.
+
+**What still needs a person**, because there is no browser automation here by
+decision: Clerk's `<Show>` renders nothing server-side, so the signed-in send
+control and the signed-out "Sign in to send" both appear only after hydration —
+neither is in the served HTML, and only a real browser session can exercise the
+whole loop.
+
 - [x] Arcjet in front of the endpoint: shield, bot detection, prompt injection, per-caller token bucket — built and verified
 - [x] Switch the bucket from IP to the Clerk user id — done, see the Clerk section above
-- [ ] Decide the approach for the rest of this feature
-- [ ] Build it
-- [ ] Delete `app/dev-stream/` once the real arena screen replaces it. Moved here out of feature 4, which claimed the deletion too early: a design reference page is not the screen that replaces the harness, and until this feature lands `/dev-stream` is the only live proof of the streaming path.
+- [x] Decide the approach for the rest of this feature
+- [x] `startTurn` server action: create-or-append, ownership checked, prompt-injection screening moved here
+- [x] `Thread.modelIds`: the line-up stored, migrated, and enforced on every model call
+- [x] `/api/model-call` takes `{ turnId, modelId }`, derives messages through `conversationFor`, refuses a turn it does not own
+- [x] The route records its own `ModelResponse` on close: an answer with metrics, or a failure with whatever partial text arrived
+- [x] Live turn state in `features/arena/`: per-model abort, dispatch clock, shared axis scale, reduced-motion tick
+- [x] Composer sends for real, locks its line-up after the first turn, and asks a signed-out visitor to sign in
+- [x] `/thread/[id]` renders stored turns; the empty arena hands the new turn over through the URL
+- [x] Vote action by `(turnId, modelId)`, with every `refusals.ts` sentence surfaced
+- [x] Per-card retry, replacing that model's row rather than adding one
+- [x] Sidebar reads `listThreadsForOwner`, grown to carry model ids and turn count
+- [x] Top bar title and standings through the `@thread` parallel-route slot, refreshed after a vote
+- [x] `features/shell/fixtures.ts` deleted; the fixture turn moved to `app/design/`; every `PlaceholderNote` this feature retires is gone
+- [x] PostHog: server-side funnel events, and `$ai_generation` built from the measured metrics
+- [x] `app/dev-stream/` deleted — the real arena replaces it
+- [x] Found and fixed a negative token count reaching the screen, and the generation speed that would have been invented from it
+- [x] Verified by hand against a running server: three models streaming independently, one failing without touching the other two, a vote landing, a follow-up continuing each model's own history, and a reload reading it all back
+- [x] Typecheck, lint, format, and a real build all clean
+- [ ] Send a real prompt while signed in, in a browser: three cards fill at once on one time axis, picking a winner marks it and updates the top bar, a follow-up continues each model's own thread — needs a person
+- [ ] Check the same screen at mobile width and with reduced motion on — needs a person
+
+Feature 6 is done bar those two checks. What it deliberately does not include: no
+stop button mid-stream, no regenerate-all, no editing a sent prompt, and no
+resuming a stream after a reload — a reload shows whatever rows were written and
+no more.
+
+Files: `features/arena/` (`actions`, `live`, `view`, `use-arena`, `composer`,
+`turn-board`, `thread-arena`, `new-thread`), `features/thread/` (`standings`,
+`title`, `record-call`, with `queries`, `writes`, `types` and `mappers`
+extended), `features/catalogue/naming.ts`,
+`features/design/reduced-motion.ts`, `features/shell/thread-bar.tsx`, the
+`app/(app)/thread/[id]` and `app/(app)/@thread` routes, and a migration adding
+`Thread.modelIds`.
 
 ## Slice 2: App shell & thread history
 
@@ -497,14 +798,14 @@ The frame everything else sits inside: a top bar and sidebar that stay in place 
 
 **What is genuinely placeholder, and what is not:**
 
-| Surface                                     | Now                                                | Becomes real in                     |
-| ------------------------------------------- | -------------------------------------------------- | ----------------------------------- |
-| Model picker and chips                      | Three fixed free-tier slugs                        | 5                                   |
-| `/models` catalogue                         | Fixture cards                                      | 5                                   |
-| Answer streaming and voting                 | Feature 4's fixture turn, vote held in local state | 6                                   |
-| Thread list                                 | Fixture threads                                    | 6 writes them, 7's query reads them |
-| `/leaderboard`                              | Fixture rows through the real `WinRate` component  | 9                                   |
-| Sidebar, top bar, standings, routing, theme | **Real, and finished here**                        | —                                   |
+| Surface                                     | Now                                               | Becomes real in |
+| ------------------------------------------- | ------------------------------------------------- | --------------- |
+| Model picker and chips                      | ~~Three fixed slugs~~ live catalogue              | 5 — done        |
+| `/models` catalogue                         | ~~Fixture cards~~ live catalogue                  | 5 — done        |
+| Answer streaming and voting                 | ~~Fixture turn~~ real streams and real votes      | 6 — done        |
+| Thread list                                 | ~~Fixture threads~~ the owner's real threads      | 6 — done        |
+| `/leaderboard`                              | Fixture rows through the real `WinRate` component | 9               |
+| Sidebar, top bar, standings, routing, theme | **Real, and finished here**                       | —               |
 
 **The thread list is fixtures rather than a live-but-empty query.** `listThreadsForOwner` is built and works, but nothing writes a thread until feature 6, so a real read renders the empty state and nothing else — and the row design, its truncation, and the crowded case would go unreviewed until the feature that depends on them is already being built. A `NODE_ENV` branch falling back to fixtures was rejected outright: a branch whose only job is to show fake data is exactly the kind that survives into production.
 

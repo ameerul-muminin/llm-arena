@@ -13,8 +13,9 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 
-import { toStoredThread, toThreadSummary } from "./mappers";
-import type { StoredThread, ThreadSummary } from "./types";
+import { toStoredThread } from "./mappers";
+import { titleFor } from "./title";
+import type { StoredThread, ThreadListRow } from "./types";
 
 /**
  * Turns in the order they were asked, and responses in a fixed order so the
@@ -36,17 +37,53 @@ export const findThread = async (id: string): Promise<StoredThread | null> => {
   return row === null ? null : toStoredThread(row);
 };
 
-/** Feature 7's sidebar. Summaries only — a sidebar never needs the answers. */
+/**
+ * Feature 7's sidebar. Never the answers — a row is a title, the models that
+ * were in the thread, and how many turns it ran.
+ *
+ * The first turn is read for its prompt alone, which is the title fallback for
+ * a thread nobody has named. The models come off the thread's own stored
+ * line-up rather than being gathered from response rows, so a thread whose
+ * first prompt was refused before it reached anyone still shows who it was
+ * going to ask.
+ */
 export const listThreadsForOwner = async (
   ownerId: string,
   take: number,
-): Promise<readonly ThreadSummary[]> => {
+): Promise<readonly ThreadListRow[]> => {
   const rows = await prisma.thread.findMany({
     where: { ownerId },
     orderBy: { createdAt: "desc" },
     take,
+    include: {
+      _count: { select: { turns: true } },
+      turns: { orderBy: { ordinal: "asc" }, take: 1, select: { prompt: true } },
+    },
   });
-  return rows.map(toThreadSummary);
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: titleFor(row.title, row.turns.at(0)?.prompt ?? null),
+    modelIds: row.modelIds,
+    turnCount: row._count.turns,
+  }));
+};
+
+/**
+ * The stored id of one model's answer to one turn.
+ *
+ * Voting names a turn and a model, never a response id — the browser is never
+ * told one, because putting it on the wire would mean teaching the model-call
+ * event union that threads exist, and that dependency is only allowed to run
+ * the other way. The unique index on (turn, model) is what makes resolving it
+ * here exact rather than a search.
+ */
+export const findResponseId = async (turnId: string, modelId: string): Promise<string | null> => {
+  const row = await prisma.modelResponse.findUnique({
+    where: { turnId_modelId: { turnId, modelId } },
+    select: { id: true },
+  });
+  return row?.id ?? null;
 };
 
 /**

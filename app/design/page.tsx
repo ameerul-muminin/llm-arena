@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FixtureTurn } from "@/features/arena/fixture-turn";
+import { FixtureTurn } from "./fixture-turn";
 import { ThemeToggle } from "@/features/design/theme";
 import { WinRate } from "@/features/design/win-rate";
-import { FIXTURE_STANDINGS } from "@/features/shell/fixtures";
+import { FIXTURE_STANDINGS } from "./fixtures";
 import { ThreadStandings } from "@/features/shell/standings";
 import { ContrastTable } from "./contrast-table";
 

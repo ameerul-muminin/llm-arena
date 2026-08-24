@@ -2,19 +2,16 @@ import type { AnswerState } from "@/features/design/answer-card";
 import { axisScaleFor, type AxisSpan } from "@/features/design/time-axis";
 import { failure } from "@/features/model-call/failures";
 import type { ModelCallFailure, ModelMetrics } from "@/features/model-call/types";
+import type { Standing } from "@/features/thread/types";
 
 /**
- * One fake turn, shared by the arena screen and the design reference.
+ * One fake turn, for the design reference page.
  *
- * **This is placeholder data and the screens that use it say so.** Real streaming
- * is feature 6; until it lands this is how the answer grid, the shared time axis,
- * and the three states that are awkward to catch by hand get looked at
- * deliberately — a model that streams, a model that thinks for a while and then
- * flushes everything at once, and a model that fails partway.
- *
- * It lives here rather than beside either screen because both need the identical
- * turn. Two copies of the same fake data is a second place for them to drift,
- * which is the same reasoning that keeps the timing maths in `metrics.ts` alone.
+ * **This is not placeholder data standing in for a feature any more** — the
+ * arena streams for real. It is a fixed specimen, kept so the answer grid, the
+ * shared time axis, and the three awkward states can be looked at deliberately
+ * rather than waited for: a model that streams, a model that thinks for a while
+ * and then flushes everything at once, and a model that fails partway.
  *
  * The numbers are internally consistent rather than invented freely. Generation
  * speed is written text over the streaming window; overall speed is everything
@@ -187,3 +184,15 @@ export const deriveAt = (
     },
   };
 };
+
+/**
+ * A thread's standings, for the reference page's copy of the top bar cluster.
+ * Real standings are derived from real votes in `features/thread/standings.ts`;
+ * these exist so the three-step collapse can be looked at without first playing
+ * a thread through to three judged turns.
+ */
+export const FIXTURE_STANDINGS: readonly Standing[] = [
+  { modelId: FIXTURES[0].modelId, modelName: FIXTURES[0].modelName, won: 2, judged: 3 },
+  { modelId: FIXTURES[1].modelId, modelName: FIXTURES[1].modelName, won: 1, judged: 3 },
+  { modelId: FIXTURES[2].modelId, modelName: FIXTURES[2].modelName, won: 0, judged: 2 },
+];

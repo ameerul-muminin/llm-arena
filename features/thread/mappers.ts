@@ -92,6 +92,7 @@ export const toThreadSummary = (row: ThreadModel): ThreadSummary => ({
   id: row.id,
   ownerId: row.ownerId,
   title: row.title,
+  modelIds: row.modelIds,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });

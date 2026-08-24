@@ -12,7 +12,23 @@ export type ChatMessage = {
   readonly content: string;
 };
 
+/**
+ * What the browser asks for: this model, answering this turn.
+ *
+ * It deliberately carries no conversation. The thread already holds every
+ * prompt and every answer, and `features/thread/conversation.ts` is already the
+ * definition of one model's own side of it, so a history sent from the browser
+ * would be a second copy of something the server can simply read — one that can
+ * disagree with the stored thread, and one that lets a caller put words in a
+ * model's mouth by claiming it said something it never did.
+ */
 export type ModelCallRequest = {
+  readonly turnId: string;
+  readonly modelId: string;
+};
+
+/** What `callModel` actually needs, once the server has assembled it. */
+export type ModelInvocation = {
   readonly modelId: string;
   readonly messages: readonly ChatMessage[];
 };

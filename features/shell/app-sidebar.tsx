@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/sidebar";
 import { ModelMark } from "@/features/design/model-mark";
 import { ThemeToggle } from "@/features/design/theme";
-import { FIXTURE_THREADS, type ThreadRow } from "./fixtures";
+import type { ThreadListRow } from "@/features/thread/types";
 import { isCurrent, NAV_ITEMS } from "./nav";
 
 /**
@@ -37,17 +37,17 @@ import { isCurrent, NAV_ITEMS } from "./nav";
  * in a product where you scroll hundreds of conversations; here it would be
  * three headings over four rows.
  *
- * The thread list is fixtures. `listThreadsForOwner` is built and works, but
- * nothing writes a thread until feature 6, so the live query would render the
- * empty state and nothing else — and this row design would go unreviewed until
- * the feature that depends on it was already being built.
+ * The list is read on the server, in the layout above this, because this is a
+ * client component and that is the last boundary that can query anything. A
+ * signed-out visitor has no threads, which reads as an invitation rather than
+ * as an error.
  */
 
 const ThreadRowLink = ({
   thread,
   active,
 }: {
-  readonly thread: ThreadRow;
+  readonly thread: ThreadListRow;
   readonly active: boolean;
 }) => (
   <SidebarMenuItem>
@@ -69,7 +69,11 @@ const ThreadRowLink = ({
   </SidebarMenuItem>
 );
 
-export const AppSidebar = () => {
+type AppSidebarProps = {
+  readonly threads: readonly ThreadListRow[];
+};
+
+export const AppSidebar = ({ threads }: AppSidebarProps) => {
   const pathname = usePathname();
   const { setOpenMobile, isMobile } = useSidebar();
 
@@ -129,13 +133,19 @@ export const AppSidebar = () => {
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
-              {FIXTURE_THREADS.map((thread) => (
+              {threads.map((thread) => (
                 <ThreadRowLink
                   key={thread.id}
                   thread={thread}
                   active={pathname === `/thread/${thread.id}`}
                 />
               ))}
+
+              {threads.length === 0 && (
+                <p className="px-2 py-1.5 text-detail text-ink-muted">
+                  Nothing here yet. Send a prompt and this fills up.
+                </p>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
