@@ -66,8 +66,11 @@ export const Composer = ({
   // must not put it back.
   const [chosen, setChosen] = useState<readonly CatalogueModel[]>(() => defaultSelection(models));
 
-  const locked = lineUp !== null;
-  const shown: readonly LineUpModel[] = lineUp ?? chosen;
+  // An empty line-up is not a lock. Only a thread that predates the stored
+  // line-up and never got a single answer can be in that state, and there is no
+  // comparison in it to protect — so its owner picks, exactly like a new thread.
+  const locked = lineUp !== null && lineUp.length > 0;
+  const shown: readonly LineUpModel[] = locked ? lineUp : chosen;
 
   const available = models.filter(
     (model) => !chosen.some((pick) => pick.modelId === model.modelId),

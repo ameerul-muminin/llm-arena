@@ -87,6 +87,25 @@ export const findResponseId = async (turnId: string, modelId: string): Promise<s
 };
 
 /**
+ * A thread's owner and its line-up, without reading a single answer.
+ *
+ * The cheap read a follow-up makes before it decides anything: a thread that
+ * already names its models is locked to them, and one that names none has never
+ * had a line-up to lock. Kept separate from `findThread` because that pulls
+ * every turn and every response, which a decision about two fields does not
+ * need.
+ */
+export const findThreadLineUp = async (
+  threadId: string,
+): Promise<{ readonly ownerId: string; readonly modelIds: readonly string[] } | null> => {
+  const row = await prisma.thread.findUnique({
+    where: { id: threadId },
+    select: { ownerId: true, modelIds: true },
+  });
+  return row === null ? null : { ownerId: row.ownerId, modelIds: row.modelIds };
+};
+
+/**
  * Who owns the thread a turn belongs to. The cheap check a route makes before
  * it spends anything on a model call, so an unauthorised write is refused
  * before the work rather than after it.

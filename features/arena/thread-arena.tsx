@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 
+import { modelNameFor } from "@/features/catalogue/naming";
 import type { Catalogue } from "@/features/catalogue/types";
 
 import { Composer, type LineUpModel } from "./composer";
@@ -45,9 +46,15 @@ export const ThreadArena = ({
   pendingTurn,
   isOwner,
 }: ThreadArenaProps) => {
+  // The line-up first, then the live catalogue, then the slug itself. A thread
+  // that has just been given a line-up is naming models the server has not sent
+  // down yet, and a raw slug where a name belongs would be a worse answer than
+  // the one the catalogue already has.
   const nameOf = useCallback(
-    (modelId: string) => lineUp.find((model) => model.modelId === modelId)?.modelName ?? modelId,
-    [lineUp],
+    (modelId: string) =>
+      lineUp.find((model) => model.modelId === modelId)?.modelName ??
+      modelNameFor(catalogue, modelId),
+    [catalogue, lineUp],
   );
 
   const arena = useArena({
@@ -82,7 +89,7 @@ export const ThreadArena = ({
           <Composer
             catalogue={catalogue}
             lineUp={lineUp}
-            onSend={(prompt) => arena.send(prompt)}
+            onSend={(prompt, modelIds) => arena.send(prompt, modelIds)}
             sending={arena.sending}
             error={arena.sendError}
           />

@@ -5,11 +5,11 @@ import { request as arcjetRequest } from "@arcjet/next";
 
 import { getFreeModels } from "@/features/catalogue/catalogue";
 import { CATALOGUE_UNAVAILABLE } from "@/features/catalogue/copy";
-import { checkLineUp } from "@/features/catalogue/selection";
+import { checkLineUp, type LineUpCheck } from "@/features/catalogue/selection";
 import { failure } from "@/features/model-call/failures";
 import type { ModelCallFailure } from "@/features/model-call/types";
 import { describeDecisionForLog, toProtectionOutcome } from "@/features/model-call/protection";
-import { findResponseId } from "@/features/thread/queries";
+import { findResponseId, findThreadLineUp } from "@/features/thread/queries";
 import { appendTurn, castVote, createThread } from "@/features/thread/writes";
 import { ajStartTurn } from "@/lib/arcjet";
 import { getPostHogClient } from "@/lib/posthog-server";
@@ -35,27 +35,41 @@ export type StartTurnResult =
       readonly threadId: string;
       readonly turnId: string;
       readonly ordinal: number;
+      /**
+       * Who this turn is actually being sent to. Returned rather than assumed,
+       * because the caller's own list is not the authority — a follow-up asks
+       * whoever the thread stores, whatever the browser thought.
+       */
+      readonly modelIds: readonly string[];
     }
   | { readonly ok: false; readonly message: string };
 
 const refused = (message: string): StartTurnResult => ({ ok: false, message });
 
+const refusal = (message: string): LineUpCheck => ({ ok: false, message });
+
 const asRefusal = (called: ModelCallFailure): StartTurnResult => refused(called.message);
 
 /**
- * Creating a thread, or adding to one.
- *
- * Only a new thread takes a line-up from the caller at all — a follow-up asks
- * whoever the thread already stores, which is what makes the lock real rather
- * than a rule the browser is trusted to follow. And the line-up it is given is
- * checked against the live free list rather than believed: the picker that
- * constrains this is a control in someone's browser, and this is the action
- * sitting behind it.
+ * A requested line-up, believed only as far as the live free list confirms it.
  *
  * A catalogue we cannot read is a refusal, not a shrug. Every card in this app
  * prints `$0.0000` on the strength of that list, so sending a prompt to models
  * nobody has confirmed are free is the one failure mode worth stopping the app
  * for. The list is cached for an hour and shared, so this is a rare minute.
+ */
+const checked = async (requested: readonly string[]): Promise<LineUpCheck> => {
+  const catalogue = await getFreeModels();
+  return catalogue.ok ? checkLineUp(catalogue.models, requested) : refusal(CATALOGUE_UNAVAILABLE);
+};
+
+/**
+ * Creating a thread, or adding to one.
+ *
+ * The line-up is only ever taken from the caller where the thread does not
+ * already have one, and it is checked rather than believed when it is: the
+ * picker that constrains it is a control in someone's browser, and this is the
+ * action sitting behind it.
  */
 const start = async (
   ownerId: string,
@@ -63,21 +77,59 @@ const start = async (
   prompt: string,
   requested: readonly string[],
 ): Promise<StartTurnResult> => {
-  if (threadId !== null) {
-    const appended = await appendTurn({ threadId, ownerId, prompt });
-    return appended.ok
-      ? { ok: true, threadId, turnId: appended.value.turnId, ordinal: appended.value.ordinal }
-      : refused(appended.message);
+  if (threadId === null) {
+    const lineUp = await checked(requested);
+    if (!lineUp.ok) return refused(lineUp.message);
+
+    const created = await createThread({ ownerId, prompt, modelIds: lineUp.modelIds });
+    return {
+      ok: true,
+      threadId: created.threadId,
+      turnId: created.turnId,
+      ordinal: 0,
+      modelIds: lineUp.modelIds,
+    };
   }
 
-  const catalogue = await getFreeModels();
-  if (!catalogue.ok) return refused(CATALOGUE_UNAVAILABLE);
+  /*
+   * A follow-up asks whoever the thread already stores, and the array the
+   * caller sent is ignored — that is the lock, and it is why a locked thread is
+   * never re-checked against the catalogue. A model leaving the free list
+   * should not strand a conversation someone is in the middle of.
+   *
+   * The exception is a thread that has never had a line-up: only threads that
+   * predate the `modelIds` column and never received a single response can be
+   * in that state, and there is nothing about them to protect. Their owner gets
+   * to choose, once, and the check runs then.
+   */
+  const existing = await findThreadLineUp(threadId);
+  const adopt = existing !== null && existing.modelIds.length === 0;
 
-  const lineUp = checkLineUp(catalogue.models, requested);
-  if (!lineUp.ok) return refused(lineUp.message);
+  if (adopt) {
+    const lineUp = await checked(requested);
+    if (!lineUp.ok) return refused(lineUp.message);
+    return append(ownerId, threadId, prompt, lineUp.modelIds);
+  }
 
-  const created = await createThread({ ownerId, prompt, modelIds: lineUp.modelIds });
-  return { ok: true, threadId: created.threadId, turnId: created.turnId, ordinal: 0 };
+  return append(ownerId, threadId, prompt, []);
+};
+
+const append = async (
+  ownerId: string,
+  threadId: string,
+  prompt: string,
+  adoptModelIds: readonly string[],
+): Promise<StartTurnResult> => {
+  const appended = await appendTurn({ threadId, ownerId, prompt, adoptModelIds });
+  return appended.ok
+    ? {
+        ok: true,
+        threadId,
+        turnId: appended.value.turnId,
+        ordinal: appended.value.ordinal,
+        modelIds: appended.value.modelIds,
+      }
+    : refused(appended.message);
 };
 
 /**
@@ -137,6 +189,7 @@ export async function startTurn(input: {
       thread_id: started.threadId,
       turn_id: started.turnId,
       ordinal: started.ordinal,
+      model_count: started.modelIds.length,
       new_thread: input.threadId === null,
     },
   });

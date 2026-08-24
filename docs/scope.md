@@ -785,6 +785,33 @@ failed card lost its retry too, since it never passed a handler. It now replays
 the fixture turn, which is the honest fixture equivalent of asking that model
 again.
 
+**And a fourth, found in review of that fix: the backfill could still leave a
+thread that could never be used again.** If every call in a legacy thread was
+refused before reaching a model, it has no responses, so there is nothing to
+recover a line-up from and the migration correctly leaves it empty. Correctly,
+and fatally: the composer disabled sending because there was nobody to send to,
+and the model-call route would have refused anything anyway, so the thread was
+readable and permanently dead — with its owner's prompt still sitting in it.
+
+The fix is to state the lock precisely rather than loosely. The line-up is fixed
+so that a thread's comparison stays a comparison between the same models; a
+thread that has never had a line-up has no comparison to protect. So an **empty**
+line-up is not a lock, it is the absence of one, and its owner may set it once,
+exactly as they would on a new thread — checked against the live list like any
+other. Every other thread is untouched: a follow-up asks whoever the thread
+stores, and the array the browser sent is ignored.
+
+The emptiness is re-checked inside the same transaction that writes the turn, so
+two follow-ups sent at once cannot each decide the thread is unclaimed and write
+a different line-up. `startTurn` now also returns the models the turn was
+actually sent to, rather than the browser assuming its own list was used.
+
+Verified against the real database, on a thread built to be exactly what the
+backfill leaves behind: a stranger cannot adopt it, adopting nothing is refused
+with a plain sentence, the owner adopts once, and a second attempt naming
+different models is ignored — it dispatches to the stored line-up and the column
+does not move. The lock holds from the moment there is something to lock.
+
 **Known and deliberately not fixed here:** a model that stops being free _after_
 a thread is created still gets called on that thread's follow-ups. The line-up is
 checked when it is set, not on every call. Re-checking per call would be one
@@ -817,7 +844,7 @@ whole loop.
 - [x] `app/dev-stream/` deleted — the real arena replaces it
 - [x] Found and fixed a negative token count reaching the screen, and the generation speed that would have been invented from it
 - [x] Verified by hand against a running server: three models streaming independently, one failing without touching the other two, a vote landing, a follow-up continuing each model's own history, and a reload reading it all back
-- [x] Review pass: the caller-supplied line-up is validated server-side, threads predating `modelIds` are backfilled and can no longer hide their own answers, and a reader is not offered a retry that can only fail
+- [x] Review pass: the caller-supplied line-up is validated server-side, threads predating `modelIds` are backfilled and can no longer hide their own answers, a thread left with no line-up at all can be given one exactly once, and a reader is not offered a retry that can only fail
 - [x] Typecheck, lint, format, and a real build all clean
 - [ ] Send a real prompt while signed in, in a browser: three cards fill at once on one time axis, picking a winner marks it and updates the top bar, a follow-up continues each model's own thread — needs a person
 - [ ] Check the same screen at mobile width and with reduced motion on — needs a person

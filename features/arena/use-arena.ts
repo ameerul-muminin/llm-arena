@@ -125,17 +125,15 @@ export const useArena = (input: ArenaInput) => {
   );
 
   const runTurn = useCallback(
-    (turnId: string): void => {
-      void Promise.all(input.modelIds.map((modelId) => streamOne(turnId, modelId, false))).then(
-        () => {
-          // Once the turn has settled the server knows things this screen does
-          // not — the sidebar's turn count, and the standings if a vote landed
-          // meanwhile. Refreshing here rather than per event keeps it to one.
-          router.refresh();
-        },
-      );
+    (turnId: string, modelIds: readonly string[]): void => {
+      void Promise.all(modelIds.map((modelId) => streamOne(turnId, modelId, false))).then(() => {
+        // Once the turn has settled the server knows things this screen does
+        // not — the sidebar's turn count, and the standings if a vote landed
+        // meanwhile. Refreshing here rather than per event keeps it to one.
+        router.refresh();
+      });
     },
-    [input.modelIds, router, streamOne],
+    [router, streamOne],
   );
 
   // The handoff. The empty arena creates the thread and navigates here with the
@@ -147,9 +145,9 @@ export const useArena = (input: ArenaInput) => {
     if (pending === null || dispatched.current) return;
     dispatched.current = true;
 
-    runTurn(pending.id);
+    runTurn(pending.id, input.modelIds);
     window.history.replaceState(null, "", `/thread/${input.threadId}`);
-  }, [input.pendingTurn, input.threadId, runTurn]);
+  }, [input.pendingTurn, input.threadId, input.modelIds, runTurn]);
 
   // Everything still in flight is abandoned when this screen goes away. The
   // server notices the disconnect and stops its own call, so a closed tab does
@@ -188,15 +186,11 @@ export const useArena = (input: ArenaInput) => {
   }, [liveTurns, input.storedTurns, input.nameOf, nowMs, votes]);
 
   const send = useCallback(
-    async (prompt: string): Promise<boolean> => {
+    async (prompt: string, modelIds: readonly string[]): Promise<boolean> => {
       setSending(true);
       setSendError(null);
 
-      const result = await startTurn({
-        threadId: input.threadId,
-        prompt,
-        modelIds: input.modelIds,
-      });
+      const result = await startTurn({ threadId: input.threadId, prompt, modelIds });
 
       setSending(false);
 
@@ -205,18 +199,20 @@ export const useArena = (input: ArenaInput) => {
         return false;
       }
 
+      // The server's list, not the browser's: a follow-up goes to whoever the
+      // thread stores, whatever this screen believed it was asking.
       dispatch({
         type: "turn-started",
         id: result.turnId,
         ordinal: result.ordinal,
         prompt,
-        modelIds: input.modelIds,
+        modelIds: result.modelIds,
         at: performance.now(),
       });
-      runTurn(result.turnId);
+      runTurn(result.turnId, result.modelIds);
       return true;
     },
-    [input.modelIds, input.threadId, runTurn],
+    [input.threadId, runTurn],
   );
 
   const retry = useCallback(
