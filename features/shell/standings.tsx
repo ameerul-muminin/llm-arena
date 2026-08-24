@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { formatWinRecord, winRate } from "@/features/design/format";
 import { ModelMark } from "@/features/design/model-mark";
 import { cn } from "@/lib/utils";
-import type { Standing } from "./fixtures";
+import type { Standing } from "@/features/thread/types";
 
 /**
  * This thread's record, in the top bar.

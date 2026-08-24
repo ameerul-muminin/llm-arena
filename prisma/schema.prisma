@@ -58,6 +58,16 @@ model Thread {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// The models this thread is being run against, fixed when it is created.
+  ///
+  /// Stored rather than inferred from the responses, because the line-up is a
+  /// property of the thread: feature 6 locks it after the first prompt, and the
+  /// thread has to know who is in it *before* anyone has answered — that is
+  /// exactly the moment the calls are dispatched. Inferring it from response
+  /// rows would also lose the line-up entirely for a turn where every call was
+  /// refused before it reached a model.
+  modelIds String[]
+
   turns Turn[]
 
   /// Feature 7's sidebar: this owner's threads, newest first.

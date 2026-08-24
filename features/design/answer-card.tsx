@@ -108,7 +108,14 @@ export const AnswerCard = ({
           <div className="space-y-3">
             {/* The plain sentence from `failures.ts`. Provider text never gets here. */}
             <p className="text-body leading-relaxed text-fail">{state.failure.message}</p>
-            {state.failure.retryable && (
+            {/*
+             * A retry needs somewhere to go. Without a handler there is no
+             * control, because someone reading a thread they do not own cannot
+             * write to it — and offering the button anyway would replace a
+             * real, useful failure with a generic refusal the moment it was
+             * pressed.
+             */}
+            {state.failure.retryable && onRetry !== undefined && (
               <Button size="xs" variant="outline" onClick={onRetry}>
                 Try again
               </Button>

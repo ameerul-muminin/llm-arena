@@ -7,7 +7,7 @@ import { getEnv } from "@/env";
 
 import { describeForLog, failure, toFailure } from "./failures";
 import { computeMetrics, type TokenCounts } from "./metrics";
-import type { ModelCallEvent, ModelCallRequest } from "./types";
+import type { ModelCallEvent, ModelInvocation } from "./types";
 
 /**
  * One model, one call, one stream of typed events.
@@ -24,7 +24,7 @@ export type ModelCallDeps = {
   readonly logError: (message: string) => void;
 };
 
-const toModelMessages = (messages: ModelCallRequest["messages"]): readonly ModelMessage[] =>
+const toModelMessages = (messages: ModelInvocation["messages"]): readonly ModelMessage[] =>
   messages.map((message) => ({ role: message.role, content: message.content }));
 
 export const defaultDeps: ModelCallDeps = {
@@ -34,7 +34,7 @@ export const defaultDeps: ModelCallDeps = {
 };
 
 export async function* callModel(
-  request: ModelCallRequest,
+  invocation: ModelInvocation,
   signal?: AbortSignal,
   deps: ModelCallDeps = defaultDeps,
 ): AsyncGenerator<ModelCallEvent, void> {
@@ -50,12 +50,12 @@ export async function* callModel(
     totalTokens: undefined,
   };
 
-  yield { type: "start", modelId: request.modelId };
+  yield { type: "start", modelId: invocation.modelId };
 
   try {
     const result = streamText({
-      model: deps.createModel(request.modelId),
-      messages: [...toModelMessages(request.messages)],
+      model: deps.createModel(invocation.modelId),
+      messages: [...toModelMessages(invocation.messages)],
       abortSignal: signal,
       // Without this the SDK logs the raw error itself; we want it logged our way.
       onError: ({ error }) => deps.logError(describeForLog(error)),
@@ -107,7 +107,7 @@ export async function* callModel(
       ),
     };
   } catch (error) {
-    deps.logError(`${request.modelId} ${describeForLog(error)}`);
+    deps.logError(`${invocation.modelId} ${describeForLog(error)}`);
     yield { type: "error", failure: toFailure(error) };
   }
 }

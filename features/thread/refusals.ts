@@ -17,6 +17,7 @@ export type WriteRefusal =
   | "turn-not-found"
   | "not-owner"
   | "already-voted"
+  | "no-models"
   | "too-few-answers"
   | "winner-not-in-turn"
   | "winner-did-not-answer";
@@ -26,6 +27,7 @@ const SENTENCES: Readonly<Record<WriteRefusal, string>> = {
   "turn-not-found": "That prompt doesn't exist.",
   "not-owner": "This conversation belongs to someone else, so you can read it but not add to it.",
   "already-voted": "You've already picked a winner for this prompt.",
+  "no-models": "Choose at least one model before sending this.",
   "too-few-answers": "There's nothing to compare yet — at least two models have to answer first.",
   "winner-not-in-turn": "That answer isn't one of the answers to this prompt.",
   "winner-did-not-answer": "That model didn't answer, so it can't win.",

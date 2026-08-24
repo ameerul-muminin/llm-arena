@@ -52,9 +52,15 @@ const NO_METRICS: MetricsColumns = {
 export const createThread = async (input: {
   readonly ownerId: string;
   readonly prompt: string;
+  /** The line-up, fixed here and never changed again. */
+  readonly modelIds: readonly string[];
 }): Promise<{ readonly threadId: string; readonly turnId: string }> => {
   const thread = await prisma.thread.create({
-    data: { ownerId: input.ownerId, turns: { create: { ordinal: 0, prompt: input.prompt } } },
+    data: {
+      ownerId: input.ownerId,
+      modelIds: [...input.modelIds],
+      turns: { create: { ordinal: 0, prompt: input.prompt } },
+    },
     select: { id: true, turns: { select: { id: true } } },
   });
 
@@ -73,19 +79,53 @@ export const createThread = async (input: {
  * The next ordinal comes from the current maximum rather than a count, so a
  * turn removed at any point in the future cannot make the next one collide with
  * an existing position.
+ *
+ * **A thread with no line-up at all can still be given one, and only then.**
+ * That is not a hole in the lock; it is the lock stated precisely. The line-up
+ * is fixed so that a thread's comparison stays a comparison between the same
+ * models, and a thread that has never had a line-up has no comparison to
+ * protect. The only way to be in that state is to predate the `modelIds`
+ * column and to have never received a single response — a thread whose prompt
+ * exists and whose answers never did. Refusing to let its owner ask anyone
+ * would strand it forever for the sake of protecting nothing.
+ *
+ * The emptiness is re-checked inside the transaction rather than outside it, so
+ * two follow-ups sent at once cannot each decide the thread is unclaimed and
+ * write a different line-up.
  */
 export const appendTurn = async (input: {
   readonly threadId: string;
   readonly ownerId: string;
   readonly prompt: string;
-}): Promise<WriteResult<{ readonly turnId: string }>> =>
+  /** Used only if the thread has no line-up yet. Ignored otherwise. */
+  readonly adoptModelIds?: readonly string[];
+}): Promise<
+  WriteResult<{
+    readonly turnId: string;
+    readonly ordinal: number;
+    /** Who this turn should actually be sent to. */
+    readonly modelIds: readonly string[];
+  }>
+> =>
   prisma.$transaction(async (tx) => {
     const thread = await tx.thread.findUnique({
       where: { id: input.threadId },
-      select: { ownerId: true },
+      select: { ownerId: true, modelIds: true },
     });
     if (thread === null) return refuse("thread-not-found");
     if (thread.ownerId !== input.ownerId) return refuse("not-owner");
+
+    const adopting = thread.modelIds.length === 0 && (input.adoptModelIds ?? []).length > 0;
+    const modelIds = adopting ? (input.adoptModelIds ?? []) : thread.modelIds;
+
+    if (modelIds.length === 0) return refuse("no-models");
+
+    if (adopting) {
+      await tx.thread.update({
+        where: { id: input.threadId },
+        data: { modelIds: [...modelIds] },
+      });
+    }
 
     const { _max } = await tx.turn.aggregate({
       where: { threadId: input.threadId },
@@ -98,10 +138,10 @@ export const appendTurn = async (input: {
         ordinal: (_max.ordinal ?? -1) + 1,
         prompt: input.prompt,
       },
-      select: { id: true },
+      select: { id: true, ordinal: true },
     });
 
-    return succeed({ turnId: turn.id });
+    return succeed({ turnId: turn.id, ordinal: turn.ordinal, modelIds });
   });
 
 /**

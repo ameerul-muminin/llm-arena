@@ -223,3 +223,17 @@ color live in `globals.css` or a shared component, never copy-pasted Tailwind.
   changelog automation. Pure ceremony.
 - **No `prefer-readonly-parameter-types`.** Sounds aligned with the immutability
   rule; in practice flags essentially every React and library type it touches.
+
+## A clean checkout needs one build before the gate passes
+
+`pnpm check` runs the typecheck first, and on a fresh clone the typecheck cannot
+pass yet: Next generates `LayoutProps` and `PageProps` into `.next/types`, so
+`tsc` fails on two layout files until something has built. Run `pnpm build` once,
+then `pnpm check` works.
+
+The same thing bites from the other direction. A **stale** `.next` fails the
+typecheck on route files that no longer exist — feature 7 hit it after deleting a
+page, feature 5 after deleting a throwaway route — and the error names a path
+inside `.next`, so it reads like a compiler problem rather than a cache one. The
+fix is `rm -rf .next && pnpm build`, in that order. Deleting `.next` alone swaps
+one failure for the other.

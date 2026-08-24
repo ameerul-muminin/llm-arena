@@ -21,6 +21,8 @@ export type ThreadSummary = {
   readonly ownerId: string;
   /** Null until someone names it. The UI falls back to the first prompt. */
   readonly title: string | null;
+  /** The line-up, fixed when the thread was created. See the schema. */
+  readonly modelIds: readonly string[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
 };
@@ -59,4 +61,34 @@ export type StoredTurn = {
 
 export type StoredThread = ThreadSummary & {
   readonly turns: readonly StoredTurn[];
+};
+
+/**
+ * A row in the sidebar's thread list.
+ *
+ * Not a `ThreadSummary`: the sidebar shows a title that is always a string, the
+ * marks of the models that were in the thread, and how many turns it ran, which
+ * is what actually makes a thread findable again. Resolving the title fallback
+ * once, where the query already holds the first turn, keeps every caller from
+ * repeating it.
+ */
+export type ThreadListRow = {
+  readonly id: string;
+  readonly title: string;
+  readonly modelIds: readonly string[];
+  readonly turnCount: number;
+};
+
+/**
+ * One model's record within a single thread.
+ *
+ * `judged` counts the turns this model answered *and* that were then voted on,
+ * never the turns it merely took part in. Counting unjudged turns would drag
+ * every record toward zero and make "won 1 of 3" a lie about what was compared.
+ */
+export type Standing = {
+  readonly modelId: string;
+  readonly modelName: string;
+  readonly won: number;
+  readonly judged: number;
 };
