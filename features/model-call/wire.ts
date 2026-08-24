@@ -1,9 +1,4 @@
-import type {
-  ModelCallEvent,
-  ModelCallFailure,
-  ModelCallFailureKind,
-  ModelMetrics,
-} from "./types";
+import type { ModelCallEvent, ModelCallFailure, ModelCallFailureKind, ModelMetrics } from "./types";
 
 /**
  * The wire format between the streaming route and the browser: newline

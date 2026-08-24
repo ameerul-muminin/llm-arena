@@ -10,10 +10,7 @@ import {
   unevaluatedRules,
 } from "@/features/model-call/protection";
 import { parseModelCallRequest } from "@/features/model-call/request";
-import {
-  toEventStreamResponse,
-  toRefusalResponse,
-} from "@/features/model-call/stream-response";
+import { toEventStreamResponse, toRefusalResponse } from "@/features/model-call/stream-response";
 import type { ModelCallEvent } from "@/features/model-call/types";
 import { aj, TOKENS_PER_MODEL_CALL } from "@/lib/arcjet";
 import { getPostHogClient } from "@/lib/posthog-server";

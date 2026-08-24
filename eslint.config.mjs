@@ -1,10 +1,127 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import tseslint from "typescript-eslint";
+import prettier from "eslint-config-prettier/flat";
+
+/**
+ * ESLint owns correctness; Prettier owns formatting. The `prettier` config goes
+ * last so every stylistic rule the other configs enable is switched back off —
+ * two tools disagreeing about the same line is a permanent tax for no gain.
+ *
+ * Linting is type-aware. It costs real time, and it buys the one failure class
+ * this app is most exposed to: an unawaited promise in a path built out of three
+ * concurrent, independently abortable streams, where a dropped rejection shows
+ * up as a missing answer rather than a crash.
+ */
+
+/**
+ * Configuration is read from the environment in exactly one place, so that a
+ * missing key is a named startup failure instead of a confusing one on
+ * someone's first prompt. These are the files allowed to do that reading: the
+ * env module itself, and the bootstrap entry points that run before or outside
+ * the app.
+ */
+const ENV_READING_FILES = [
+  "env.ts",
+  "instrumentation.ts",
+  "instrumentation-client.ts",
+  "prisma.config.ts",
+];
+
+/**
+ * `NODE_ENV` and the `NEXT_PUBLIC_*` values stay legal everywhere, because Next
+ * substitutes them at build time and that substitution only happens on a literal
+ * `process.env.X` — routing them through a function call would break it on the
+ * client. Neither is a secret, so neither needs the fail-fast treatment.
+ */
+const ALLOWED_ENV_KEYS = /^(NODE_ENV|NEXT_PUBLIC_[A-Z0-9_]+)$/;
+
+const noStrayEnvReads = {
+  selector: [
+    'MemberExpression[object.type="MemberExpression"]',
+    '[object.object.name="process"]',
+    '[object.property.name="env"]',
+    `[property.name!=/${ALLOWED_ENV_KEYS.source}/]`,
+  ].join(""),
+  message:
+    "Read configuration through getEnv() from @/env, so a missing key fails at startup with a name. Only env.ts and the bootstrap entry points may touch process.env directly.",
+};
 
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+
+  {
+    name: "llm-arena/type-aware",
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts"],
+    extends: [tseslint.configs.strictTypeChecked, tseslint.configs.stylisticTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+
+  {
+    name: "llm-arena/project-rules",
+    files: ["**/*.ts", "**/*.tsx", "**/*.mts"],
+    rules: {
+      // CLAUDE.md: strict TypeScript, no `any`. A warning nobody reads is not a rule.
+      "@typescript-eslint/no-explicit-any": "error",
+
+      // Not hypothetical. The verification pass found `process.env.DATABASE_URL!`
+      // standing exactly where a fail-fast check belonged — a non-null assertion
+      // on a required secret is the silent failure the rules forbid.
+      "@typescript-eslint/no-non-null-assertion": "error",
+
+      // Every type in this codebase is a `type`; nothing needs declaration merging.
+      "@typescript-eslint/consistent-type-definitions": ["error", "type"],
+
+      // Server-side failure logging is required, and already uses these two behind
+      // `[model-call]` / `[arcjet]` prefixes. What this catches is a debugging
+      // `console.log` left behind.
+      "no-console": ["error", { allow: ["warn", "error"] }],
+
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+
+      "no-restricted-syntax": ["error", noStrayEnvReads],
+
+      // Interpolating a number into a log line or a label is not a mistake; this
+      // rule's real value is catching an object or a possibly-undefined value
+      // stringifying into "[object Object]" or "undefined".
+      "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
+
+      // `(msg) => console.error(msg)` is idiomatic and the callback's return type
+      // is already void. The rule earns its place on the non-shorthand cases,
+      // where a void value is genuinely being passed off as a result.
+      "@typescript-eslint/no-confusing-void-expression": ["error", { ignoreArrowShorthand: true }],
+    },
+  },
+
+  {
+    name: "llm-arena/env-reading-files",
+    files: ENV_READING_FILES,
+    rules: { "no-restricted-syntax": "off" },
+  },
+
+  {
+    // Config files are plain JS and sit outside the TypeScript project.
+    name: "llm-arena/untyped-js",
+    files: ["**/*.js", "**/*.mjs", "**/*.cjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+  },
+
+  prettier,
+
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
@@ -12,6 +129,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated by Prisma, not written by hand.
+    "lib/generated/**",
   ]),
 ]);
 

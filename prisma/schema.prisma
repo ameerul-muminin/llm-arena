@@ -1,7 +1,10 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// The arena's data model. Four tables and two enums; the reasoning behind each
+// decision lives in docs/scope.md under feature 3, not here.
+//
+// There is deliberately no User table. Clerk is the single source of truth for
+// identity, so `Thread.ownerId` and `Vote.voterId` are plain Clerk id strings.
+// They get no foreign key, which is the accepted cost of not keeping a second
+// copy of identity that can drift.
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +13,157 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+/// Whether a model actually produced an answer. A failed response keeps its
+/// row so the thread reflects what really happened rather than quietly
+/// dropping the model that broke.
+enum ModelResponseStatus {
+  ANSWERED
+  FAILED
+}
+
+/// Mirrors `ModelCallFailureKind` in features/model-call/types.ts. The database
+/// value is the union's own string; the identifier is only uppercased because
+/// Prisma enum members cannot contain a hyphen. `features/thread/failure-kind.ts`
+/// maps between the two in both directions, and doing it through a `Record`
+/// keyed by each side makes adding a member to one and not the other a
+/// typecheck error.
+///
+/// Only the kind is stored, never the sentence a person reads. Persisting the
+/// wording would freeze it, so improving a message later would leave every old
+/// thread reading the old way.
+enum ModelCallFailureKind {
+  UNAUTHORIZED     @map("unauthorized")
+  RATE_LIMITED     @map("rate-limited")
+  UNAVAILABLE      @map("unavailable")
+  TIMEOUT          @map("timeout")
+  ABORTED          @map("aborted")
+  SIGN_IN_REQUIRED @map("sign-in-required")
+  BLOCKED          @map("blocked")
+  FLAGGED          @map("flagged")
+  UNKNOWN          @map("unknown")
+}
+
+/// One conversation, readable by anyone with the link, usable only by its owner.
+///
+/// `title` is nullable on purpose: until someone names a thread there is no
+/// title, and inventing one from the first prompt at write time would bake a
+/// guess into the database. The UI falls back to the first prompt at render.
+model Thread {
+  id        String   @id @default(cuid(2))
+  /// Clerk user id. No foreign key — see the note at the top of this file.
+  ownerId   String
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  turns Turn[]
+
+  /// Feature 7's sidebar: this owner's threads, newest first.
+  @@index([ownerId, createdAt])
+}
+
+/// One prompt and every model's answer to it. The unit the arena works in, and
+/// the thing a vote is a judgement about.
+///
+/// A single model's own conversation is reconstructed by walking a thread's
+/// turns in order and taking that model's response from each, so "each model
+/// keeps its own separate thread" is a read rather than a second copy of the
+/// history.
+model Turn {
+  id        String   @id @default(cuid(2))
+  threadId  String
+  /// Position within the thread, from zero. Unique with `threadId`, so two
+  /// prompts racing to be the same turn fail loudly instead of both landing.
+  ordinal   Int
+  prompt    String
+  createdAt DateTime @default(now())
+
+  thread    Thread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  responses ModelResponse[]
+  vote      Vote?
+
+  @@unique([threadId, ordinal])
+}
+
+/// What one model did with one prompt.
+///
+/// The metrics are real columns rather than a JSON blob because feature 9
+/// averages them across every response for a model, and that has to be a plain
+/// SQL aggregate. Every one of them is nullable: a failed call honestly has
+/// none of them, and nothing here is ever zero-filled to look complete.
+///
+/// No cost column. Every model in this app is free tier, so it would be a table
+/// of zeros restating a constant — the $0.0000 on screen is a fact about the
+/// tier, not a per-call measurement.
+model ModelResponse {
+  id      String @id @default(cuid(2))
+  turnId  String
+  /// OpenRouter slug, e.g. `google/gemma-4-31b-it:free`.
+  modelId String
+
+  status      ModelResponseStatus
+  /// Present for an answered response, and also for one aborted part-way,
+  /// which keeps whatever text had already arrived.
+  text        String?
+  failureKind ModelCallFailureKind?
+
+  timeToFirstTokenMs      Int?
+  generationMs            Int?
+  totalMs                 Int?
+  deltaCount              Int?
+  streamed                Boolean?
+  tokensPerSecond         Float?
+  endToEndTokensPerSecond Float?
+  inputTokens             Int?
+  outputTokens            Int?
+  reasoningTokens         Int?
+  textTokens              Int?
+  totalTokens             Int?
+
+  createdAt DateTime @default(now())
+
+  turn    Turn  @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  wonVote Vote? @relation("WinningResponse")
+
+  /// One model answers a given turn exactly once.
+  @@unique([turnId, modelId])
+  /// Redundant against the primary key on its own, and that is the point: it
+  /// exists so `Vote` can point at (response, turn) as a pair, which is what
+  /// makes Postgres itself refuse a vote for another turn's answer.
+  @@unique([id, turnId])
+  /// Feature 9 aggregates speed per model across every thread.
+  @@index([modelId])
+}
+
+/// Exactly one winner per turn.
+///
+/// The schema cannot express "only if two or more models answered" without a
+/// trigger or a denormalised counter. That check lives in the write
+/// transaction in features/thread/writes.ts instead, and the gap is recorded in
+/// scope.md rather than assumed away.
+model Vote {
+  id                String   @id @default(cuid(2))
+  /// Unique, so a turn is judged once. Feature 8 makes voting the owner's,
+  /// which is why this is per turn rather than per turn and voter.
+  turnId            String   @unique
+  winningResponseId String
+  /// Clerk user id. No foreign key — see the note at the top of this file.
+  voterId           String
+  createdAt         DateTime @default(now())
+
+  turn            Turn          @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  /// The composite reference is the integrity guarantee: the winning response
+  /// must belong to this very turn, enforced by the database rather than by
+  /// remembering to check.
+  winningResponse ModelResponse @relation("WinningResponse", fields: [winningResponseId, turnId], references: [id, turnId], onDelete: Cascade)
+
+  /// Required by Prisma before it will treat the composite reference above as
+  /// one-to-one. Weaker than the `@unique` on `turnId` and therefore redundant
+  /// as a constraint, but it also indexes the lookup feature 9 does most —
+  /// "did this response win?".
+  @@unique([winningResponseId, turnId])
+  /// Feature 9's personal leaderboard.
+  @@index([voterId])
 }

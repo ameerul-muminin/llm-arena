@@ -61,7 +61,7 @@ export async function* callModel(
       onError: ({ error }) => deps.logError(describeForLog(error)),
     });
 
-    for await (const part of result.fullStream) {
+    for await (const part of result.stream) {
       switch (part.type) {
         case "text-delta": {
           if (part.text === "") break;

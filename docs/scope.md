@@ -16,17 +16,17 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 
 ## At a glance
 
-| #   | Feature                                     | Phase      | Status      |
-| --- | ------------------------------------------- | ---------- | ----------- |
-| 1   | Connecting to a model                       | Foundation | done        |
-| 2   | Coding standards & tooling                  | Foundation | not started |
-| 3   | Data model                                  | Foundation | not started |
-| 4   | Design & look                               | Foundation | not started |
-| 5   | Model picker                                | Slice 1    | not started |
+| #   | Feature                                     | Phase      | Status                        |
+| --- | ------------------------------------------- | ---------- | ----------------------------- |
+| 1   | Connecting to a model                       | Foundation | done                          |
+| 2   | Coding standards & tooling                  | Foundation | done                          |
+| 3   | Data model                                  | Foundation | done                          |
+| 4   | Design & look                               | Foundation | done                          |
+| 5   | Model picker                                | Slice 1    | not started                   |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | Arcjet done, rest not started |
-| 7   | App shell & thread history                  | Slice 2    | not started |
-| 8   | Public thread visibility & sharing          | Slice 3    | not started |
-| 9   | Leaderboard: global & personal              | Slice 4    | not started |
+| 7   | App shell & thread history                  | Slice 2    | done                          |
+| 8   | Public thread visibility & sharing          | Slice 3    | not started                   |
+| 9   | Leaderboard: global & personal              | Slice 4    | not started                   |
 
 ## Verification pass, 2026-08-17
 
@@ -61,11 +61,12 @@ A deliberate stop to confirm what is actually wired up works, before adding anyt
   Coverage is now measured rather than assumed, in `features/model-call/protection.ts`. Any rule that fails to evaluate is logged and captured as an `arcjet_failed_open` PostHog event carrying `prompt_injection_unchecked`, so the honest question "what fraction of prompts were actually screened?" has a real answer.
 
   Determining whether the injection rule ran is done by absence, not by reading the error. A rule that runs leaves a result carrying its own type whatever it concluded; a rule that fails leaves a result typed only `ERROR`, with no trace of which rule it was. Verified against live decision payloads — an earlier version of this check looked for `PROMPT_INJECTION_DETECTION` among the errored results and was silently always false.
+
 - ~~**Clerk is not wired at all.**~~ Done. Pulled forward out of feature 3, see below.
 
 ## Clerk, pulled forward out of feature 3
 
-Feature 3 originally owned Clerk, alongside the data model. Moved because the IP-keyed rate limit was a live weakness rather than a future one — an office or cafe behind one NAT shared a single 30-token allowance — and because every table feature 3 will add (users, threads, votes) needs a real user id as a foreign key. Building auth first means the schema is designed against something that exists instead of a placeholder to be migrated later. It was also cheap now and expensive later: today it touched a handful of files; after threads and votes exist it would have touched the schema too.
+Feature 3 originally owned Clerk, alongside the data model. Moved because the IP-keyed rate limit was a live weakness rather than a future one — an office or cafe behind one NAT shared a single 30-token allowance — and because every table feature 3 will add (threads, votes) needs a real user id to hang off. Building auth first means the schema is designed against something that exists instead of a placeholder to be migrated later. (Written before feature 3 was built, and one word of it turned out wrong: those ids are indexed Clerk strings, not foreign keys, because there is no `User` table to point at. The reasoning is under feature 3.) It was also cheap now and expensive later: today it touched a handful of files; after threads and votes exist it would have touched the schema too.
 
 **Public by default, protected at the resource.** `proxy.ts` establishes the auth context and guards nothing. Only `POST /api/model-call` requires a signed-in user, which matches feature 8's rule that a thread is readable by anyone with the link and only sending or voting needs an account. This is also what Clerk recommends over guarding routes from the middleware layer.
 
@@ -84,6 +85,7 @@ Verified: signed-out `POST` returns 401 with the plain sentence, and `/dev-strea
 - [x] Signed-in end-to-end check in a browser — confirmed working
 
 **No identity ever travels from the browser.** An earlier version passed the PostHog distinct id to the server as an `x-posthog-distinct-id` header. Once `auth()` supplied a trusted id, that header became not just dead but a liability: a client-controlled identity value sitting on the endpoint that enforces the rate limit, one careless change away from being trusted and spoofed. Removed, along with the generic header passthrough that existed only to carry it. Client and server events line up anyway, because both now key on the Clerk id.
+
 - ~~**`tokensPerSecond` is misleading for models that buffer.**~~ Fixed. See "Speed, and why there are two numbers" under feature 1.
 
 ## Foundation
@@ -108,7 +110,7 @@ Two real decisions were open once that exists: how the app calls OpenRouter to g
 
 Two places the plan above met reality and the plan is the thing that changed.
 
-**The AI SDK is used for the provider call, not for the transport to the browser.** `streamText().fullStream` gives us deltas, finish reason, and token usage without owning SSE parsing, which is exactly what it was picked for. Its React streaming hooks are deliberately not used, because they carry the SDK's own UI message shape and this app's contract is a per-model metrics object the card, the leaderboard, and PostHog all have to agree on. So the wire is our own: newline-delimited JSON, one typed `ModelCallEvent` per line, decoded through validators that drop anything unrecognised rather than trusting it. Readable with plain `curl`, and it keeps the metrics contract ours end to end.
+**The AI SDK is used for the provider call, not for the transport to the browser.** `streamText().stream` gives us deltas, finish reason, and token usage without owning SSE parsing, which is exactly what it was picked for. (This said `fullStream` until feature 2's linter flagged it as deprecated; `stream` is the SDK's own replacement and the rename is verified live — see feature 2.) Its React streaming hooks are deliberately not used, because they carry the SDK's own UI message shape and this app's contract is a per-model metrics object the card, the leaderboard, and PostHog all have to agree on. So the wire is our own: newline-delimited JSON, one typed `ModelCallEvent` per line, decoded through validators that drop anything unrecognised rather than trusting it. Readable with plain `curl`, and it keeps the metrics contract ours end to end.
 
 **Env validation runs from `instrumentation.ts`, not at module load.** `readEnv` is a pure function over a source object; `instrumentation.ts`'s `register` calls it once, before the server takes its first request. Doing it at module load inside the route instead would have made `next build` itself require a live API key, which is wrong — a build is not a run. Verified by hand: starting the server with no key logs `MissingEnvError: Missing required environment variable: OPENROUTER_API_KEY`, naming the key and pointing at `.env.example`.
 
@@ -156,22 +158,262 @@ Feature 1 is done.
 
 Write down the real conventions for this project once it actually exists, then install linting, formatting, and a pre-commit hook that actually enforces them.
 
-- [ ] Decide the approach
-- [ ] Install lint, format, and whatever else is needed, and write it up in a coding-standards doc
+#### Decided
+
+The conventions are not being invented here. Feature 1 already established them in working code, consistently: kebab-case filenames, named exports only, arrow-function `const`s, `type` never `interface`, `readonly` on every property, doc comments that explain _why_ rather than restate the signature, and a strict split between pure cores and the one file per feature allowed to touch HTTP. This feature's job is to write that down and make a machine hold the line, not to redesign it.
+
+**Prettier owns formatting; ESLint owns correctness. No overlap.** Two tools arguing about the same line is a permanent low-grade tax. Prettier gets configured to match what the code already looks like — 100-column width, double quotes, semicolons, two-space indent, trailing commas — so installing it reformats nothing and the first commit is not a whole-repo diff that buries real changes. `eslint-config-prettier` goes last in the chain to switch off every stylistic ESLint rule. `prettier-plugin-tailwindcss` sorts class strings into canonical order, which matters ahead of feature 4: identical class lists have to look identical, or the "if the same handful of classes shows up in three places, that's a component" rule is unenforceable by eye.
+
+**ESLint goes type-aware.** `eslint-config-next` alone checks almost nothing about types. Turning on typescript-eslint's `strict-type-checked` with `projectService` costs lint time (11s today, expect roughly double) and buys `no-floating-promises` and `no-misused-promises` — precisely the failure class that matters in an app whose whole shape is three concurrent aborted streams, and precisely the kind of bug that produces a silently dropped error rather than a crash.
+
+**Six rules carry their weight; each one traces to a rule in `CLAUDE.md` or to a bug this repo already had.** Not a wall of plugins.
+
+- `no-explicit-any` → error. `CLAUDE.md` says no `any`; that should be a failure, not a warning nobody reads.
+- `no-non-null-assertion` → error. This is not hypothetical: the verification pass found `process.env.DATABASE_URL!` in `lib/prisma.ts`, a non-null assertion standing exactly where a fail-fast check belonged. A linter catches that class of thing every time; a code read caught it once, late.
+- `process.env` restricted outside `env.ts` and the root bootstrap files (`instrumentation.ts`, `instrumentation-client.ts`, `prisma.config.ts`). This is the mechanical form of the fail-fast env rule — one module is the source of truth for what configuration exists. `NODE_ENV` and `NEXT_PUBLIC_*` reads stay legal everywhere, because Next inlines those at build time and they genuinely cannot go through a function call on the client.
+- `consistent-type-definitions: "type"` → matches the codebase exactly as written today.
+- `no-console`, allowing `warn` and `error`. Server-side failure logging is required by the rules and already uses `console.error`/`console.warn` behind `[model-call]` and `[arcjet]` prefixes. What this catches is a stray `console.log` left in after debugging.
+- `no-unused-vars` with an `^_` escape hatch, error not warning.
+
+**One known violation, and the rule is doing its job.** `lib/arcjet.ts` reads `process.env.ARCJET_KEY ?? ""` at module scope. That is not actually a silent failure — `ARCJET_KEY` is in the startup check, so the server cannot come up without it — but the `?? ""` exists for a real second reason: `next build` evaluates route modules, and reaching for a validated key there would make a build require a live secret, which feature 1 already rejected as wrong. So this one gets an inline disable with that reason written next to it. Forcing the reason to be written down is the entire point of the rule, and it beats both a silent allow-list and a refactor to lazy initialisation that nothing else needs.
+
+**Hooks: fast commit, strict push.** Husky plus lint-staged. `pre-commit` runs Prettier and ESLint over staged files only, a couple of seconds, so committing stays frictionless and nobody starts reaching for `--no-verify`. `pre-push` runs the full gate — typecheck, lint, and a real `next build` — because a production build catches things a typecheck cannot. That is not a guess either: Clerk v7's removal of `<SignedIn>`/`<SignedOut>` typechecked clean and failed only at render, and the build is what caught it. Slow checks belong at the boundary where the cost is paid once, not on every commit.
+
+**Scripts** get filled in properly: `typecheck`, `lint`, `lint:fix`, `format`, `format:check`, and a `check` that runs the whole gate in one command, so the "actually run it" rule is one thing to type rather than three to remember.
+
+**Half of this project's rules cannot be linted, and the doc says so out loud.** Folder-by-feature, side effects pushed to the edges, immutable data, no copy-pasted Tailwind, honest `null`s never zero-filled, a plain sentence instead of a provider error, and the accessibility baseline are all review-by-eye. Listing them as unenforceable next to the enforced set is more useful than implying a green lint means the standards were met. Cross-feature import boundaries are the one item here that could be mechanised later — pointless today with a single feature, worth revisiting at the second.
+
+**Deliberately not installing.** No test runner or browser automation, already decided project-wide. No `eslint-plugin-functional`: it fights idiomatic React and Prisma hard enough that the disable comments would outnumber the catches. No commitlint or conventional-commit enforcement: single author, no changelog automation, pure ceremony. No `prefer-readonly-parameter-types`, which sounds aligned with the rules but flags essentially every React and library type it touches.
+
+#### What the build turned out to be
+
+Four places reality differed from the plan above. The standards themselves survived intact; what changed is that turning the linter on found real defects, which is the entire argument for doing this feature before there is more code to point it at.
+
+**"Installing Prettier reformats nothing" was overstated.** Ten files changed. But the shape of that diff is the useful part: of feature 1's hand-written code, exactly two files moved — one manually-wrapped import in `wire.ts` that Prettier rejoined, and a missing trailing newline in `lib/prisma.ts`. Everything else was the `create-next-app` scaffold (`app/page.tsx`, `app/layout.tsx`, mostly Tailwind class reordering, and feature 4 replaces those pages anyway) plus markdown table realignment. `printWidth: 100` was confirmed against the code rather than guessed: 18 lines already sat in the 91–100 band and only 5 exceeded it.
+
+**Line endings needed `.gitattributes`, which was not in the plan.** Git here runs `core.autocrlf=true`, rewriting files to CRLF on checkout, while Prettier writes and checks LF. Left alone, `pnpm format:check` would fail on every file in a fresh clone and the pre-commit hook would reformat files nobody had touched. `* text=auto eol=lf` pins it. This surfaced only because `git diff` printed twenty CRLF warnings — worth recording, because nothing about it is visible from reading the config.
+
+**Type-aware linting found four real defects, not just style.** All fixed:
+
+- `lib/prisma.ts` typed the global singleton as `{ prisma: PrismaClient }`, always present. It genuinely is absent on first load, so the `??` beside it was dead code as far as the compiler was concerned — and any future reader of that global would have been told a null check was unnecessary when it is not. Now optional.
+- `features/model-call/protection.ts` interpolated `decision.reason.type`, which is optional on Arcjet's own type, straight into the security log. The line someone reads to find out why a request was refused could print the word "undefined" and look like a bug in the logging. Now `?? "unknown"`.
+- `lib/posthog-server.ts` had a nested `if (!client)` assignment; now `??=`.
+- `prisma.config.ts` used bracket access for `DATABASE_URL`.
+
+**The AI SDK deprecated `fullStream`, and this is a correction to feature 1.** `no-deprecated` caught `result.fullStream` in `call-model.ts`. The SDK's replacement is `result.stream` — identical type, identical doc comment, a pure rename. Feature 1's write-up above names `fullStream` and is now wrong; `stream` is the property in use.
+
+That rename was verified live rather than by typecheck, since types cannot prove a stream still delivers. A throwaway `.mts` script ran `streamText(...).stream` against OpenRouter directly (Node 24 runs TypeScript natively, so this needed no test runner and no browser): 4 real incremental deltas, 47 characters, and a `finish` event carrying the full usage breakdown — 184 output tokens of which only 18 were text and 166 reasoning. That last detail independently corroborates feature 1's decision to split text from reasoning tokens. Script deleted after running.
+
+The first attempt hit a 429 on `google/gemma-4-31b-it:free`, the dev harness default, with OpenRouter naming an upstream shared-pool limit at Google AI Studio. Not our bug, but more evidence that free-tier slugs rot and that feature 5 must read the live catalogue.
+
+**Two `require-await` disables, both structural.** The one-event refusal generator in `stream-response.ts` is `async` because that is the shape its consumer takes, so a refusal travels the identical path as a real stream; `rewrites` in `next.config.ts` is `async` because Next's own type declares it returning a promise. Each carries its reason inline.
+
+**Both hooks were verified by actually firing them.** A file with an `any`, a `console.log`, and a stray `process.env` read was staged and committed: the hook blocked it, all three project rules reported, `HEAD` did not move, and lint-staged reverted its own formatting. Then the hook was run against clean staged files and passed. `pnpm check` — typecheck, lint, format, and a real build — is green.
+
+Lint went from 11s to 17s with type awareness on. Worth it.
+
+- [x] Decide the approach
+- [x] Prettier + `eslint-config-prettier` + Tailwind class-order plugin, configured to match existing code
+- [x] Type-aware ESLint with the six project rules, and the documented disable in `lib/arcjet.ts`
+- [x] `.gitattributes` pinning LF, which the plan missed
+- [x] Husky: `pre-commit` staged format/lint, `pre-push` full gate
+- [x] `package.json` scripts, `.editorconfig`, `engines`
+- [x] Fix the four defects the linter found, and the deprecated `fullStream`
+- [x] `docs/coding-standards.md`, splitting enforced from review-by-eye
+- [x] Verify: lint, typecheck, format, and build all clean, and both hooks actually fire and actually block
+
+Feature 2 is done.
 
 ### 3. Data model
 
 The core things every feature depends on: users tied to Clerk, threads, each model's own messages inside a thread, and votes. A vote should only ever be possible on a turn where two or more models actually answered.
 
-- [ ] Decide the approach
-- [ ] Build it
+Clerk already landed, pulled forward out of this feature — see the Clerk section above. What is left here is the schema, the first migration, and a typed data-access layer.
+
+#### Decided
+
+**Four tables: `Thread`, `Turn`, `ModelResponse`, `Vote`. No `User` table.** Clerk stays the single source of truth for identity; `Thread.ownerId` and `Vote.voterId` are plain indexed Clerk id strings. A mirrored user table would be a second copy of identity that can drift, plus either an upsert on every write path or a webhook route to secure, and no feature currently needs anything Clerk does not already hand us at render time. The cost is real and accepted: those two columns get no foreign-key integrity, and the personal leaderboard is a `WHERE ownerId = ...` rather than a join. Revisit only if we ever need to store something about a person that Clerk does not hold.
+
+**A `Turn` is the unit of the arena, not a message.** One `Turn` holds one user prompt; the models' answers hang off it as `ModelResponse` rows, one per model. This falls straight out of feature 6: a prompt goes to every selected model at once, and the vote is a judgement about that one prompt. Model X's own separate conversation — which feature 6 needs to send a follow-up — is reconstructed by walking the thread's turns in order and taking X's response from each, so the "each model keeps its own thread" behaviour is a read, not a second copy of the history. A flat `Message` table with a role column and a nullable `modelId` would model the same data while making both the grouping and the vote target awkward to express.
+
+**Metrics are real columns on `ModelResponse`, mirroring `ModelMetrics` field for field.** Not a JSON blob: feature 9 averages speed and time-to-first-token across every response for a model, and that has to be a plain SQL aggregate over indexed numeric columns. They are all nullable, because a failed call honestly has none of them and `ModelMetrics`' own rule is that nothing is ever zero-filled to look complete. A single mapper turns an answered row back into a `ModelMetrics`, so the card, the leaderboard, and PostHog keep agreeing by construction.
+
+**No cost column.** Every model here is free tier, so a cost column would be a table of zeros restating a constant. The `$0.0000` the rules require on screen is a fact about the tier, not a per-call measurement, and storing it as one would imply it was measured.
+
+**Failures store the kind, never the sentence.** `ModelResponse.failureKind` is a Prisma enum mirroring `ModelCallFailureKind`; the human sentence stays derived by `failures.ts` at render time. Persisting the wording would freeze it, so improving a message later would leave old threads reading the old way. A compile-time assertion pins the enum to the TypeScript union, so adding a failure kind to one and not the other is a typecheck error rather than a runtime surprise.
+
+**The winning answer cannot point outside its own turn.** `Vote` carries `turnId` and `winningResponseId` together, against a composite unique `(id, turnId)` on `ModelResponse` — Postgres itself then refuses a vote for an answer that belongs to a different turn. `turnId` is unique on `Vote`, so a turn has at most one vote, which matches feature 8's reading that the thread's owner is the only one who can vote on it.
+
+**"Two or more models answered" is enforced in the write path, not by the schema.** Postgres cannot express "this row may exist only if a sibling table has at least two rows in a given state" without a trigger or a denormalised counter, and both are more machinery than the rule is worth. The single transaction that writes a vote counts the turn's answered responses first and refuses below two. Written down here so the gap is a known one rather than an assumed guarantee.
+
+**Rows are written server-side when a stream closes, never by the browser.** The metrics are the whole point of the leaderboard, so a client-supplied number is a forgeable number — the same reasoning that removed the `x-posthog-distinct-id` header. The thread and turn are created in one write _before_ the three model calls are dispatched, and each per-model request carries the `turnId`; each route then writes its own `ModelResponse` on close. Creating the turn up front is what avoids three parallel requests racing to create the same one.
+
+**Known gap, stated rather than papered over:** if a browser disconnects mid-stream the route is cancelled and that model's row may never be written, so re-opening the thread shows the turn with that model simply absent. Preferred over writing a fabricated "incomplete" row.
+
+**Win rate's denominator is turns that were actually judged.** `won N of M`, where M counts turns in which this model answered _and_ a vote was cast. Counting unvoted turns would drag every model's rate toward zero and make the honest phrasing feature 9 insists on into a lie.
+
+**Ids are `cuid(2)` everywhere.** Thread ids go in shareable URLs, so they want to be short and opaque rather than 36 characters and sequential. `uuid(7)`'s time-ordered index locality is a real advantage at a scale this app will not reach.
+
+Deletes cascade `Thread → Turn → ModelResponse → Vote`. Indexes: `Thread(ownerId, createdAt)` for feature 7's sidebar, unique `Turn(threadId, index)` for ordering, unique `ModelResponse(turnId, modelId)` so one model answers a turn once, `ModelResponse(modelId)` for feature 9's aggregates, and `Vote(voterId)` for the personal leaderboard.
+
+The data-access layer lives in `features/thread/`, folder by feature: pure row↔domain mappers, reads, and the transactional writes, with `lib/prisma.ts` the only thing that touches the client. Nothing outside that folder writes SQL.
+
+#### What the build turned out to be
+
+The design above survived intact. Five places the tooling had opinions, and one decision the plan did not anticipate having to make.
+
+**The first real cross-feature import, and the rule needed sharpening.** `features/thread/` needs `ModelMetrics`, `ModelCallFailure`, and `ChatMessage`, all owned by `features/model-call/types.ts`. `coding-standards.md` said cross-feature imports "should not happen", written when there was only one feature to import from. Copying those types would have created a second place for them to drift, which is precisely what the derived-numbers-in-one-place rule exists to stop — and `types.ts` already describes itself as "the contract between a model call and everything downstream of it". So the rule is now directional rather than absolute: a feature may import another's stated contract, one way, and `model-call` still knows nothing about threads. Written up in `coding-standards.md` rather than left as an unexplained exception.
+
+**Prisma enum members cannot contain a hyphen**, so the generated TypeScript names are `RATE_LIMITED` where the union says `"rate-limited"`. `@map` keeps the _stored_ value identical to the union's string — the column reads `rate-limited`, so the database is legible on its own — and `features/thread/failure-kind.ts` reconciles the two type names through a `Record` keyed by each side in turn. That is the compile-time assertion the plan promised: `TO_DB` must name every member of the union, `FROM_DB` every member of the enum, so adding one and forgetting the other fails the typecheck.
+
+**Prisma refused the composite reference until it also had `@@unique([winningResponseId, turnId])`.** Strictly redundant — `turnId` is already unique on `Vote`, which is a stronger constraint — but it is what Prisma requires before it will type the relation as one-to-one. Kept, with the redundancy noted in the schema, since the index it creates is also the one feature 9 wants for "did this response win?".
+
+**Prisma 7's client generator suffixes row types**: `ThreadModel`, `TurnModel`, `ModelResponseModel`. The unsuffixed names belong to query-argument types.
+
+**An honest guard read as dead code.** `createThread` checks that the nested create actually produced its first turn; Prisma types the returned array as always-populated, so `turns[0]` made the check `no-unnecessary-condition` bait. `.at(0)` returns `T | undefined` and restores it. Worth keeping — a fabricated turn id would hide a real disagreement between Prisma and the database.
+
+**Verification ran through a throwaway route, not a script.** A standalone `.mts` file cannot resolve the `@/` alias or the `server-only` import, so `app/dev-thread/route.ts` did the round trip inside Next and `curl` read the JSON back. Deleted after running, same as feature 2's throwaway script. Every step below is from that run, against the real Postgres:
+
+- All four refusals fire with their plain sentences: voting with one answer (`too-few-answers`), voting for a failed response, voting as a non-owner, voting twice.
+- The real vote succeeds, and `findThread` reads back the turn with its winner marked.
+- **A cross-turn vote inserted by raw SQL, going around the data layer entirely, is refused by Postgres: `23503 violates foreign key constraint "Vote_winningResponseId_turnId_fkey"`.** That is the guarantee the composite key was for, proven with the application code bypassed.
+- `conversationFor` gives alpha its four-message history and beta only the two prompts it never answered — no invented replies.
+- Deleting the thread cascades: turns, responses, and votes all zero.
+
+One consequence of the design worth stating plainly, since it showed up in that run: a model that answered turn 1 and failed turn 2 sends two user messages in a row on its next call. That is legal in the chat format and it is the honest representation of "asked twice, answered once".
+
+- [x] Decide the approach
+- [x] Four models, two enums, and the enum-to-union compile-time assertion in `prisma/schema.prisma`
+- [x] First migration, applied against the real Postgres
+- [x] `features/thread/` — `types`, `failure-kind`, `mappers`, `conversation`, `refusals`, `queries`, `writes`
+- [x] Verify: a real round trip — create, answer, fail, vote, follow up, read back, delete
+- [x] Verify: a vote below two answers is refused, and a cross-turn winner is refused by Postgres itself
+- [x] Typecheck, lint, format, and a real build all clean
+
+Feature 3 is done. What it deliberately does not include: nothing calls any of this yet. Wiring the model-call route to create a turn before dispatch and record its own response on close is feature 6's job, and the leaderboard's aggregate queries are feature 9's.
 
 ### 4. Design & look
 
 A coffee or dark brown background, warm, not neutral gray or true black. One accent color, rust, used only for things you interact with, buttons, links, focus states, the win-rate bar, never as decoration. Because the background and the accent are both warm tones from the same family, the accent has to stay clearly brighter and more saturated than the background, enough that a button never blends into the page behind it, that's a real risk with two warm colors this close and worth checking by eye, not just by the numbers. Blue, indigo, and purple are never the accent, under any circumstance. Green is reserved only for marking a winner, red only for errors, never reused for anything else. Contrast should genuinely hold up in both light and dark mode, not just look fine at a glance.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### The plugin did not fire on its own
+
+`CLAUDE.md` requires Anthropic's `frontend-design` plugin for any UI work and says to invoke it directly if it doesn't fire. It didn't, because it is not installed — it exists in the official marketplace at `~/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/` but is not an active skill in this project. Its `SKILL.md` was read and applied directly for this decision. **Installing it properly is a real action item before features 5–9**, otherwise every future UI feature repeats this workaround.
+
+Its own calibration note matters here: it warns that AI design clusters around three default looks, one of which is "near-black background with a single bright accent." It also says the brief's own words always win. This brief pins the palette, so warm brown and rust are not negotiable and are not the thing to argue with. The freedom left is typography, structure, and the signature — and that is where this deliberately does not spend itself on a default.
+
+#### Direction: a bench instrument, not a chat app
+
+The product's actual subject is honest measurement. Feature 1 already went to real trouble to refuse a number it could not defend — `tokensPerSecond` is `null` when an answer arrived in one flush, reasoning tokens are split out from written ones, nothing is zero-filled. The design's whole job is to look like the thing that behaves that way: a warm-lit measuring bench, three identical instruments running the same sample side by side. Not a leaderboard-as-marketing-page, and not a chat UI with stats bolted on.
+
+That thesis decides the small stuff by itself. No gradients, no glow, no soft shadow stack, no decorative iconography. Surfaces separate by a one-pixel warm line and a small step in ground tone, the way panels on an instrument do. Radii stay small and consistent — `--radius` is `0.5rem`, which lands controls at 8px and cards at 11px through shadcn's own scale — because a bench is machined, not pillowy. (This first said 6px and 10px, picked before the scale existed. The built numbers are the real ones.)
+
+#### Type: two faces, and one rule about which
+
+Geist and Geist Mono are `create-next-app`'s defaults and are being replaced. Two faces, both from Google Fonts, both loaded through `next/font/google`:
+
+- **Instrument Sans** — everything written for a person to read. Body, headings, buttons, prose. Slightly narrow and sharp, so it holds up in a 1/3-width column without feeling cramped, and it isn't Inter.
+- **IBM Plex Mono** — measured facts and identifiers only, always with tabular figures.
+
+**The rule is the interesting part: monospace means "this is a number we measured, or a name a provider gave us."** Every metric, every token count, every model id, every `won 4 of 5`, every `$0.0000`, every em dash standing in for a number we refuse to invent. Prose is never mono; a measurement is never not. That is a structural device that encodes something true about the content rather than decorating it, which is exactly the test the plugin sets — and it means a reader learns, without being told, that the mono text is the part that came from the wire.
+
+Heading scale is small and tight, four steps only: 28 / 20 / 15 / 13. This app has no hero and does not need one.
+
+#### Color: named tokens, both modes, no raw hex anywhere else
+
+All of it lives in `globals.css` as CSS custom properties surfaced through Tailwind 4's `@theme`, per the rule that shared values never get copy-pasted as Tailwind classes. Dark is the primary mode and what the sketches show; light is a real design, not a inverted afterthought.
+
+Dark: ground `#17110E`, surface `#1E1714`, raised `#261D19`, line `#332721`, text `#F2E9E1`, muted `#B3A296`, accent `#E2673B`, accent-hover `#F07E52`, accent-ink `#1A120E`, win `#7FC08C`, fail `#E8806F`.
+
+Light: ground `#FAF4ED`, surface `#FFFCF7`, line `#E3D6C8`, text `#241A15`, muted `#6B594C`, accent `#A8401F`, accent-hover `#8E3517`, accent-ink `#FFF6EF`, win `#2F7D4F`, fail `#B03A28`.
+
+**The brief's warning about two warm tones was right, and the first rust failed it.** `#C8532A` was the intuitive pick and it computes to 4.17:1 against the dark ground — under the 4.5 floor as link text, and only 3.71:1 with parchment text sitting on it as a button fill. Both directions fail. `#E2673B` reaches 5.50:1 against the ground, and a button is that rust as the fill with near-black-brown `#1A120E` as its label, which is the same 5.50:1 read the other way. Muted text lands at 7.52:1 dark and 6.09:1 light. These are computed, not eyeballed, and they still get checked in a browser in both modes before this feature is called done — the brief asks for both and it is right to.
+
+Rust appears on: buttons, links, focus rings, the pick-this-answer control, the active nav item, and the win-rate bar. Nothing else, ever. Green appears on exactly one thing, the winner badge and its card's marked edge. Red appears on exactly one thing, a failed call's message and retry affordance.
+
+#### Signature: one shared time axis across the three answers
+
+The single element this app gets remembered by. Under each answer card sits a hairline track, and **all three tracks in a turn share one time scale**, so the cards are literally a race chart drawn in place. On each track: a tick at that model's first token, and a filled band spanning first delta to last. Watching it fill is watching the thing the product claims to measure.
+
+It is honest by construction, which is why it earns its place over a prettier chart:
+
+- A model that buffers has no generation window, so it gets a single solid mark at the moment it flushed, not a band. The visual says exactly what `streamed: false` says.
+- A model that fails gets a track that stops where it stopped. No band, no invented endpoint.
+- The scale is the turn's own slowest finisher, so it is a real comparison within that turn and never a comparison against a made-up ceiling.
+
+**The track is drawn in muted foreground, not rust.** Rust is reserved for what you interact with plus the win-rate bar the brief explicitly names, and letting a measurement bar borrow it would spread the accent until it stops meaning anything. One bold thing, kept quiet everywhere around it.
+
+It needs no new data: TTFT, first-delta and last-delta wall clock, and `streamed` all already exist on `ModelMetrics` from feature 1.
+
+#### Layout, from the sketches
+
+The sketches are structure and are followed as such: persistent left sidebar (brand, Arena / Leaderboard / Models, a rule, then the thread list and New Thread, with user avatar and theme toggle pinned at the bottom), a top bar with the sidebar toggle, breadcrumb, and the per-model win chips on the right, then the answer grid, then the composer pinned at the bottom with model chips and Add model inside it.
+
+The answer grid is `1fr` per selected model, one to three columns, collapsing to stacked full-width cards under 900px with the shared time axis still shared — that is the one thing that must survive the reflow, or the signature stops meaning anything on a phone.
+
+Nothing in the sketches contradicts anything written above, so there is nothing to stop and ask about.
+
+#### Mechanics
+
+- **shadcn is not installed yet** and this feature installs it, Tailwind 4 / CSS-variables mode, wired to the tokens above rather than to its default neutral ramp. Components actually needed now: button, card, popover, skeleton, tooltip, separator, scroll-area, avatar, dropdown-menu. Nothing installed speculatively.
+- **`next-themes` with `attribute="class"`.** The current `globals.css` switches on `prefers-color-scheme`, which cannot support the theme toggle the sketch puts in the sidebar. System preference on a first visit, explicit choice remembered after.
+- **Accessibility baseline, per the rules:** a visible rust focus ring on every interactive element with a ground-colored offset so it reads on both surfaces, focus never removed only restyled, the whole arena operable by keyboard including picking a winner, `prefers-reduced-motion` collapsing the time axis to its final state instead of animating, and the winner never signalled by green alone — it carries a badge with a word in it.
+- **Streaming has three real states and each is designed, not defaulted:** waiting (a skeleton in the card body, metrics row showing em dashes), streaming (text appearing, track filling, metrics still dashes until they exist), done (metrics resolve, pick control enables once two models have answered). A failure replaces the body with the plain sentence from `failures.ts` and a Retry button, and the card stays in the grid rather than disappearing.
+- **Copy is written from the reader's side.** The pick control reads "Pick this answer" and produces a badge that reads "Winner". Speed is labelled "time to first token" and "tokens/sec", never abbreviated to something only we understand. A model that flushed reads "arrived in one chunk" rather than a blank. Empty arena reads as an invitation to send something, not as an apology.
+- ~~`app/dev-stream/` is deleted as part of this feature.~~ Wrong, and corrected below — it moves to feature 6.
+
+#### Deliberately not doing
+
+No animation library. No dark/light "auto" gimmicks beyond the toggle. No per-model brand colors or logos — feature 4's "not doing right now" list already parks distinct model icons, and coloring them would fight the one-accent rule. No charting library; the time axis is a handful of divs over already-computed numbers.
+
+#### What the build turned out to be
+
+The direction survived intact — every decision above is what shipped. Six places reality had something to say, and one of them was a real accessibility defect that the plan would not have caught.
+
+**The palette failed its own contrast check a second time, on a pair nobody had thought to look at.** The rust was checked by hand while choosing it, and that caught the first failure. Running the full set found another: `--line-strong`, the token behind every control boundary, measured **1.72:1 in light and 1.73:1 in dark**. shadcn's outline button draws its edge from `--border` in light mode, which is this app's decorative hairline at **1.31:1** — an outline button whose boundary is effectively invisible. WCAG asks 3:1 of a control's boundary, and both numbers are less than half of that.
+
+The fix separates two things that had been one idea:
+
+- **`--line` is decorative** and stays quiet. It is the hairline between surfaces — card edges, table rules, dividers. A card is already delineated by its own background, so this line is not carrying the boundary on its own, and no threshold applies to it.
+- **`--line-strong` is a control's boundary** and now clears 3:1 against ground, surface, and raised alike, in both modes. `#8f7660` light, `#8a7365` dark.
+
+`components/ui/button.tsx`'s outline variant was changed from `border-border` to `border-input` so it draws from the strong token in both modes rather than only in dark. That is a one-word edit to vendored code with the reason written inline next to it.
+
+The contrast table on the reference page reports a decorative pair as measured-but-unthresholded rather than quietly dropping it. Showing 1.31:1 next to the word "Decorative" is honest; deleting the row to make the summary read green would not be.
+
+**Every threshold now passes in both modes**, verified twice over: once by a throwaway Node script reading the tokens straight out of `globals.css` (deleted after running, same as features 2 and 3), and once by the page itself reading what the browser actually resolved.
+
+**React 19's `set-state-in-effect` rule killed the theme toggle's `mounted` guard, and the replacement is better.** The standard next-themes pattern keeps a `mounted` flag and flips it in an effect, purely to learn whether hydration has happened — the linter correctly calls that a cascading render. Letting the `dark` class pick the icon in CSS removes the problem instead of silencing it: both icons and both accessible labels are rendered, the theme shows one, and the button is real markup on the first paint with no placeholder and no flash. The contrast table had the same shape and moved to `useSyncExternalStore` with a `MutationObserver` on the `<html>` class, which is the honest description of what it is doing — the theme class genuinely is an external system, written by next-themes' inline script before React exists.
+
+**The `eyebrow` utility deliberately sets no color, and very nearly did.** The time axis prints its caption in `--fail` when a call stops short. A color baked into the utility would have sat in the same cascade layer as `text-fail` and won or lost by declaration order rather than by intent — a bug that would have shown up as "the failure caption is the wrong colour sometimes". The utility owns the shape; callers state the colour.
+
+**shadcn's CLI has changed shape and the old flags are gone.** `--base-color` no longer exists; there is now a `--base` (radix / base / aria) and a named preset. Initialised with `--base radix --preset nova`. Two consequences worth knowing: the preset writes a neutral OKLCH ramp into `globals.css` that this feature replaced wholesale, and `shadcn` itself is now a runtime dependency rather than only a CLI, because `globals.css` imports `shadcn/tailwind.css` for its custom variants and keyframes. That file was read before being kept — it is variants and keyframes only, no visual opinions, so it does not fight the design.
+
+**Mapping shadcn's slots onto our tokens meant an unmodified component already wears the design**, which is what made the component work small. One clash is documented at the top of `globals.css` because it will bite someone: **shadcn's `--accent` is not our accent.** In its vocabulary `--accent` is the faint tint behind a hovered menu row; our rust is its `--primary`. Reaching for `bg-accent` expecting rust produces a brown smudge.
+
+**`app/dev-stream/` is not deleted, and the plan above was wrong to say it would be.** It said the harness goes "once a real screen exists to replace it". A design reference page is not that screen — the real arena is feature 6, and `/dev-stream` is currently the only live proof of the streaming path. Deleting it now would remove the only way to exercise streaming until feature 6 lands. The deletion moves to feature 6, where it belongs.
+
+**`app/design/` is meant to outlive this feature.** With no test runner and no browser automation by decision, a single page showing every token, every state, and every measured contrast pair is what makes "verify it in a real browser" a workable instruction rather than a hunt across screens that do not exist yet. Any future token edit gets checked there first.
+
+Files: `app/globals.css` (the whole visual language, and the only file allowed a hex value), `app/layout.tsx` (fonts and the theme provider), `app/page.tsx` (a holding page wearing the real design instead of Vercel's boilerplate), `features/design/` (`format.ts`, `time-axis.tsx`, `metrics-row.tsx`, `model-mark.tsx`, `win-rate.tsx`, `answer-card.tsx`, `theme.tsx`), `app/design/` (the reference page, its fixture-driven arena preview, and the contrast table), plus `components.json`, `lib/utils.ts`, and nine vendored `components/ui/` files.
+
+`features/design/` imports `ModelMetrics` and `ModelCallFailure` from `features/model-call/types.ts`. That is the second use of the directional cross-feature contract rule feature 3 established, and it points the same way — `model-call` still knows nothing about anything downstream.
+
+- [x] Decide the approach
+- [x] `frontend-design` plugin installed and enabled — note that plugin skills register at session start, so it could not be invoked through the skill tool in the session that built this; its `SKILL.md` was applied directly from the same file the plugin ships
+- [x] Tokens in `globals.css`: both modes, Tailwind 4 `@theme`, no raw hex outside this file
+- [x] Fonts swapped to Instrument Sans + IBM Plex Mono, Geist removed — confirmed absent from the rendered HTML
+- [x] shadcn installed and themed to the tokens
+- [x] `next-themes`, class-based, with the toggle
+- [x] Shared components: answer card, metrics row, time axis, win chip, win-rate bar
+- [x] Found and fixed a real 3:1 control-boundary failure in both modes
+- [x] Every thresholded contrast pair passes in both modes, measured twice by independent paths
+- [x] Reduced motion honoured, and the time axis reads its final state rather than animating into it
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Both pages served 200 from a running dev server with a clean server log
+- [ ] Tab through `/design` in a real browser and confirm the focus ring is visible on every control, in both themes — the one item that genuinely needs a person
+
+Feature 4 is done bar that last check. What it deliberately does not include: no sidebar, no top bar, no composer. Those are the app shell, which is feature 7, and building them here would have meant designing screens before the features that own them had been thought about.
 
 ## Slice 1: Core arena loop
 
@@ -225,6 +467,7 @@ Every prompt sent, every answer finishing, and every vote cast should be tracked
 - [x] Switch the bucket from IP to the Clerk user id — done, see the Clerk section above
 - [ ] Decide the approach for the rest of this feature
 - [ ] Build it
+- [ ] Delete `app/dev-stream/` once the real arena screen replaces it. Moved here out of feature 4, which claimed the deletion too early: a design reference page is not the screen that replaces the harness, and until this feature lands `/dev-stream` is the only live proof of the streaming path.
 
 ## Slice 2: App shell & thread history
 
@@ -232,8 +475,84 @@ Every prompt sent, every answer finishing, and every vote cast should be tracked
 
 The frame everything else sits inside: a top bar and sidebar that stay in place while the page scrolls, the thread's name, and each model's win record shown right there (shrinking down to a small dot and number if it gets crowded). The sidebar lists a signed-in user's own past threads so the tool actually feels usable across visits, not just in one sitting.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### Decided
+
+**The shell is a route group, not a component people remember to use.** `app/(app)/layout.tsx` owns the sidebar and top bar; `/` (arena), `/leaderboard`, and `/models` live inside it and cannot forget to be framed. `/design` deliberately stays outside — it is a reference instrument for the palette, not a screen of the product, and wrapping it in the app chrome would make it lie about what it is.
+
+**shadcn's `sidebar`, not a hand-rolled one.** The pieces this needs — an off-canvas drawer under `lg`, focus trapped inside it, focus returned on close, an escape key that works — are precisely the things that should never be hand-rolled, because the failure mode is a keyboard user stuck behind an invisible panel. It also already reads the `--sidebar-*` tokens, which feature 4 mapped onto our palette, so it arrives wearing the design without a single override. The cost accepted: it pulls in `sheet` and a few primitives we do not otherwise need.
+
+**The win records are one instrument, not three badges.** The sketch shows three pills floating in the top bar. Grouped into a single bordered cluster with hairline dividers, they read as what they actually are — this thread's standings, one readout — which is the same bench vocabulary the rest of the app speaks. That also makes scope's "shrinking down to a small dot and number if it gets crowded" fall out as a real ladder rather than an arbitrary breakpoint, with each step dropping the least informative thing first:
+
+1. Wide — model mark, short name, and the record.
+2. Medium — mark and record. The name is the first thing to go, because the mark already identifies the model.
+3. Narrow — a single control reading the leader's record, opening the full standings in a popover. Below a certain width three records cannot be shown honestly, and a popover is better than three illegible ones.
+
+**A thread row carries its models and its turn count.** A list of titles is what any chat app does and it is not what makes a thread findable here — you remember "the one where I put Gemma against Qwen" far better than you remember what you called it. So each row is the title, the marks of the models that were in it, and the number of turns in mono. Both facts are true of the content and both help you find the thread again.
+
+**No date grouping.** "Today / Previous 7 days / Older" is the chat-app default, and it earns its place in a product where you scroll hundreds of conversations. Here it would be three headings over four rows.
+
+**Every stub is marked, in one voice, by one component.** Fixture data that looks real is worse than no data, because it quietly becomes the thing people evaluate. A single `PlaceholderNote` marks each surface that is not yet wired, so the marker is consistent, greppable, and deleted feature by feature rather than hunted for. It says what the real thing will do, in the reader's terms, without narrating our issue tracker.
+
+**One fixture module, shared.** Feature 4's design reference already owns a fake turn — a streamer, a buffering model, and a failure. The arena placeholder needs the same three. They move to one module both import, because two copies of the same fake turn is a second place for them to drift, which is the same reasoning that put the timing maths in `metrics.ts` alone.
+
+**What is genuinely placeholder, and what is not:**
+
+| Surface                                     | Now                                                | Becomes real in                     |
+| ------------------------------------------- | -------------------------------------------------- | ----------------------------------- |
+| Model picker and chips                      | Three fixed free-tier slugs                        | 5                                   |
+| `/models` catalogue                         | Fixture cards                                      | 5                                   |
+| Answer streaming and voting                 | Feature 4's fixture turn, vote held in local state | 6                                   |
+| Thread list                                 | Fixture threads                                    | 6 writes them, 7's query reads them |
+| `/leaderboard`                              | Fixture rows through the real `WinRate` component  | 9                                   |
+| Sidebar, top bar, standings, routing, theme | **Real, and finished here**                        | —                                   |
+
+**The thread list is fixtures rather than a live-but-empty query.** `listThreadsForOwner` is built and works, but nothing writes a thread until feature 6, so a real read renders the empty state and nothing else — and the row design, its truncation, and the crowded case would go unreviewed until the feature that depends on them is already being built. A `NODE_ENV` branch falling back to fixtures was rejected outright: a branch whose only job is to show fake data is exactly the kind that survives into production.
+
+**Composer UI, not composer behaviour.** The prompt box, the model chips, and the submit control are part of the frame someone has to look at to judge it, so they get built and styled here. Sending is feature 6's, and the control says so rather than failing silently when pressed.
+
+**Accessibility, beyond the baseline.** A skip link to the main content, because a fixed sidebar puts a lot of links between the top of the page and the answers. Real landmarks — one `nav`, one `main`, one `header`. The sidebar toggle names what it does and reports its state. The current page in the nav carries `aria-current`, not just a rust tint, so it is not signalled by colour alone.
+
+#### What the build turned out to be
+
+The plan held. What it did not anticipate was that the interesting bugs would all be in vendored code and in one line of glue nobody looks at.
+
+**`cn()` was silently deleting every font size in the design system.** `tailwind-merge` resolves conflicts by class group, and it cannot tell `text-micro` — a size from feature 4's scale — from `text-ink-muted`, a colour. Both are `text-*`, so it kept the last one and threw the other away. `cn("measured text-micro text-ink-muted")` returned `measured text-ink-muted`, and the size simply vanished.
+
+Nothing errors when this happens. The element inherits a size, the page looks nearly right, and the type scale quietly stops being a scale. It surfaced only from reading the rendered HTML of a model mark in the top bar and noticing a class that should have been in the list was not. `lib/utils.ts` now names the five sizes through `extendTailwindMerge`, which fixes it without weakening anything — `text-detail text-body` still collapses to `text-body`. **Every component that composes a size and a colour through `cn` was affected**, which is most of them.
+
+**Two vendored shadcn files failed the linter, and both were worth fixing rather than exempting.**
+
+- `hooks/use-mobile.ts` kept the viewport width in state and seeded it from an effect — the same `set-state-in-effect` shape feature 4 already hit twice. Rewritten onto `useSyncExternalStore`, which is what a media query actually is. That also fixed a real behaviour bug the rule was pointing at: the original returned `false` on the first client render regardless of the viewport, so a phone briefly got the desktop layout.
+- `sidebar.tsx`'s `toggleSidebar` returned the result of a `setState` — a callback claiming a value it does not have.
+
+**`shadcn add --overwrite` silently reverted feature 4's accessibility fix.** The outline button's border had been moved from `--border` to `--input` because an outline button's edge is a control boundary and WCAG asks 3:1 of it. Adding `sidebar` re-fetched `button.tsx` and put the 1.31:1 version back. Caught and re-applied. **After any `shadcn add`, check the vendored files it touched** — `--overwrite` means what it says, and the reason comments are not protection.
+
+**`SidebarInset` is not used, though it is the obvious partner to `SidebarProvider`.** It renders a `<main>`. The layout already has one, and the top bar belongs outside it: using both would leave every page with two of a landmark that permits one, and put the banner inside the content it labels.
+
+**The vendored `SidebarTrigger` hardcodes "Toggle Sidebar" and reports no state**, so the shell has its own toggle. A control should say what it does and, when it toggles something, say which way it currently is — `aria-expanded`, and a label reading "Hide the sidebar" or "Show the sidebar" rather than naming the widget.
+
+**`WinChip` was deleted.** `ThreadStandings` supersedes it, and once the top bar used the cluster the pill was left with exactly one caller: the design reference page showing it off. A component that exists only to appear on its own reference page is not a shared component. The reference page now shows the real cluster, including its collapse behaviour.
+
+**Deleting `app/page.tsx` broke the typecheck until `.next` was cleared.** Next's generated route validator still imported the removed module, so `tsc` failed on a file nobody wrote. Worth knowing, because the error names a path inside `.next` and reads like a compiler problem rather than a stale-cache one.
+
+**`hooks/` is a layer-wide folder, which this project's folder-by-feature rule otherwise forbids.** It exists because `components.json` points shadcn's generated hooks at it. Left as-is and noted in `coding-standards.md` alongside `components/ui/`: vendored code keeps its own conventions, and pretending otherwise would mean fighting every future `shadcn add`.
+
+Files: `app/(app)/` (the shell layout and the arena, leaderboard, and models screens), `features/shell/` (`app-sidebar`, `top-bar`, `standings`, `skip-link`, `placeholder-note`, `nav`, `fixtures`), `features/arena/` (`fixtures`, `fixture-turn`, `composer`), plus `hooks/use-mobile.ts` and four more vendored `components/ui/` files.
+
+- [x] Decide the approach
+- [x] `app/(app)/` route group with the shell layout, and `/`, `/leaderboard`, `/models` inside it
+- [x] Sidebar: brand, nav, thread list with model marks and turn count, user and theme in the footer
+- [x] Top bar: sidebar toggle, thread name, and the standings cluster with its three-step ladder
+- [x] `PlaceholderNote`, used on every surface that is not yet wired
+- [x] Shared fixture module, with feature 4's design reference moved onto it
+- [x] Arena screen: composer UI and the answer grid on the fixture turn
+- [x] `/leaderboard` and `/models` placeholder screens
+- [x] Skip link, landmarks, `aria-current`, and a labelled toggle that reports its state — one `main`, one `header`, verified in the rendered HTML
+- [x] Found and fixed a silent font-size bug affecting every component in the design system
+- [x] Typecheck, lint, format, and a real build all clean; all four routes serve 200 with a clean server log
+- [ ] Check it at mobile width in a real browser: drawer opens, traps focus, closes on escape, returns focus — needs a person
+
+Feature 7 is done bar that last check. What it deliberately does not include: sending a prompt, a live model catalogue, and persisted votes, all of which are marked on screen and belong to features 5 and 6.
 
 ## Slice 3: Public visibility & sharing
 

@@ -2,7 +2,7 @@ allowBuilds:
   # core-js's postinstall only prints a funding banner; nothing needs building.
   # Prisma's postinstall fetches the query engine binaries; without it the
   # client cannot be generated or run.
-  '@prisma/engines': true
+  "@prisma/engines": true
   core-js: false
   prisma: true
   sharp: false
