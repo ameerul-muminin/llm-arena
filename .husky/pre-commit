@@ -1,0 +1,4 @@
+# Fast on purpose. Formatting and linting, staged files only, so committing stays
+# cheap and nobody starts reaching for --no-verify. The slow, whole-project
+# checks live in pre-push, where the cost is paid once instead of every commit.
+pnpm exec lint-staged

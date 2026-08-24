@@ -38,7 +38,10 @@ export const toProtectionOutcome = (decision: ArcjetDecision): ProtectionOutcome
 
 /** What goes in the server log. The detail stays here, not in the browser. */
 export const describeDecisionForLog = (decision: ArcjetDecision): string =>
-  `conclusion=${decision.conclusion} reason=${decision.reason.type} id=${decision.id}`;
+  // The reason type is optional on the SDK's own type. This is the line someone
+  // reads to work out why a request was refused, so it says "unknown" rather
+  // than printing the word "undefined" and looking like a bug in the logging.
+  `conclusion=${decision.conclusion} reason=${decision.reason.type ?? "unknown"} id=${decision.id}`;
 
 /**
  * Which rules failed to evaluate, by rule type.

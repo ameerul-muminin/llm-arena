@@ -21,14 +21,13 @@ export function getPostHogClient(): PostHog | null {
     return null;
   }
 
-  if (!posthogClient) {
-    posthogClient = new PostHog(token, {
-      host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
-      // Route calls go through once per request — flush immediately so events
-      // are not dropped when the serverless function tears down.
-      flushAt: 1,
-      flushInterval: 0,
-    });
-  }
+  posthogClient ??= new PostHog(token, {
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+    // Route calls go through once per request — flush immediately so events
+    // are not dropped when the serverless function tears down.
+    flushAt: 1,
+    flushInterval: 0,
+  });
+
   return posthogClient;
 }

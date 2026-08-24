@@ -4,7 +4,11 @@ import { getEnv } from "@/env";
 
 import { PrismaClient } from "./generated/prisma/client";
 
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
+// Optional, because on the very first load it genuinely is not there. Typing it
+// as always-present made the `??` below dead code as far as the compiler was
+// concerned, and would have let any other reader of it skip a null check that
+// reality still requires.
+const globalForPrisma = global as unknown as { prisma?: PrismaClient };
 
 export const prisma =
   globalForPrisma.prisma ??

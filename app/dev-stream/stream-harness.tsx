@@ -21,8 +21,7 @@ type Status = "idle" | "streaming" | "done" | "failed";
 const DEFAULT_MODEL = "google/gemma-4-31b-it:free";
 
 const ms = (value: number | null): string => (value === null ? "—" : `${Math.round(value)} ms`);
-const rate = (value: number | null): string =>
-  value === null ? "—" : `${value.toFixed(1)} tok/s`;
+const rate = (value: number | null): string => (value === null ? "—" : `${value.toFixed(1)} tok/s`);
 const count = (value: number | null): string => (value === null ? "—" : String(value));
 
 export const StreamHarness = () => {
@@ -190,7 +189,7 @@ export const StreamHarness = () => {
         ) : null}
 
         {answer !== "" ? (
-          <p className="whitespace-pre-wrap rounded border border-current/20 p-3">{answer}</p>
+          <p className="rounded border border-current/20 p-3 whitespace-pre-wrap">{answer}</p>
         ) : null}
 
         {metrics !== null ? (

@@ -1,0 +1,15 @@
+# Generated or vendored: nothing here is written by hand, so formatting it only
+# creates diffs that hide real ones.
+node_modules
+.next
+out
+build
+lib/generated
+next-env.d.ts
+*.tsbuildinfo
+pnpm-lock.yaml
+public
+
+# Vendored agent skills, committed as published rather than as ours to restyle.
+.agents
+skills-lock.json

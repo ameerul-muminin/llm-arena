@@ -31,6 +31,13 @@ import arcjet, {
  * `auth()` on the server and is never read from a client-supplied header.
  */
 export const aj = arcjet({
+  // The one sanctioned direct read of a secret, and the reason it exists: this
+  // runs at module scope, and `next build` evaluates route modules, so reaching
+  // for a validated key here would make building the app require a live secret.
+  // A build is not a run. Safety comes from elsewhere — `ARCJET_KEY` is in the
+  // startup check, so the server cannot come up without it, and the `?? ""` is
+  // only satisfying the type at a point where the value is already guaranteed.
+  // eslint-disable-next-line no-restricted-syntax
   key: process.env.ARCJET_KEY ?? "",
   // The SDK's default decision deadline is 500ms in production and 1s in
   // development. Shield and bot detection answer well inside that, but prompt

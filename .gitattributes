@@ -1,0 +1,13 @@
+# Keep line endings LF in the working tree, on every platform.
+#
+# This is not cosmetic. Git is configured with core.autocrlf=true on at least one
+# machine here, which rewrites files to CRLF on checkout, while Prettier writes
+# and checks LF. Without this, `pnpm format:check` fails on a fresh clone for
+# every file in the repo, and the pre-commit hook reformats files nobody touched.
+* text=auto eol=lf
+
+*.ico binary
+*.png binary
+*.jpg binary
+*.woff binary
+*.woff2 binary

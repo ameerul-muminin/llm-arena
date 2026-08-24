@@ -1,0 +1,7 @@
+# The real gate: typecheck, lint, formatting, and an actual production build.
+#
+# The build is not redundant with the typecheck. Clerk v7 removed <SignedIn> and
+# <SignedOut>; both typechecked clean and failed only at render, and it was
+# `next build` that caught it. A typecheck alone would have let that reach the
+# remote looking healthy.
+pnpm check

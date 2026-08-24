@@ -45,6 +45,10 @@ export const toEventStreamResponse = (
  */
 export const toRefusalResponse = (event: ModelCallEvent, status: number): Response =>
   toEventStreamResponse(
+    // Nothing here needs awaiting; it is an async generator because that is the
+    // shape `toEventStreamResponse` consumes, so a one-event refusal travels the
+    // identical path as a real stream rather than a parallel one that can drift.
+    // eslint-disable-next-line @typescript-eslint/require-await
     (async function* () {
       yield event;
     })(),
