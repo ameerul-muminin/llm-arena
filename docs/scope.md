@@ -728,6 +728,70 @@ throwaway route deleted afterwards — the same pattern features 3 and 5 used:
   `Expected \`turnId\` to be an id.`
 - Typecheck, lint, format, and a real production build all clean.
 
+#### Three holes found in review, all fixed
+
+**The line-up was taken from the caller and stored verbatim.** The picker
+deduplicates, caps at three, and only ever offers free models — and every one of
+those is a rule enforced in a browser, with a server action behind it that
+accepted whatever array it was handed. A crafted request could open a thread
+against ten models, or the same model three times, and because the line-up is
+stored, every turn afterwards would keep dispatching it. The same slug twice is
+also two provider calls racing to upsert one row on an index only one of them
+can win.
+
+`checkLineUp` now runs on the one path that takes a line-up from anyone —
+creating a thread — and it is a pure function over the catalogue, so the rule
+reads in one place. A catalogue that cannot be read refuses the send rather than
+waving it through: every card in this app prints `$0.0000` on the strength of
+that list, and it is cached for an hour and shared, so this is a rare minute
+rather than a common one. Verified against the live list: three duplicates
+collapse to one model, six are refused, `openai/gpt-4o` is refused, and a real
+trio passes.
+
+Follow-ups never had this hole and still do not — they ask whoever the thread
+stores, and the caller's array is ignored entirely.
+
+**Threads created before `modelIds` existed lost every answer on screen.** The
+migration adding the column wrote it as a plain nullable array with no default,
+which is how Prisma writes a scalar list, so every pre-existing row held NULL.
+Prisma hands NULL back as `[]` rather than erroring, which is worse than a crash:
+nothing throws, and the thread simply renders as though it had never asked
+anyone anything — every stored answer filtered out of the page, standings empty,
+every follow-up refused — while the prompts still sit there. Confirmed by
+inserting a row in exactly that state and reading it back.
+
+Two fixes, because either alone leaves a sharp edge:
+
+- A backfill migration recovers each thread's line-up from the models that
+  actually answered or failed in it, and normalises the rest to an empty array
+  so nothing is left NULL.
+- `storedTurnView` no longer lets the line-up decide _what_ is shown, only what
+  order it is shown in. Anything that answered gets a card whether or not it is
+  in the line-up, because it genuinely did answer and this page's job is to say
+  what happened. Verified: the legacy thread rendered both its cards even before
+  the backfill ran.
+
+**A reader was offered a retry that could only fail.** Someone reading a shared
+thread got a "Try again" on any retryable failure, and pressing it would have
+reset the card and replaced a real, useful failure with the generic refusal the
+endpoint answers a non-owner with — destroying information in exchange for
+nothing. The card now draws that control only when it is given somewhere to send
+it, and the turn only hands one over to the thread's owner, which is the same
+rule already governing the pick control. Verified in the rendered HTML: a
+signed-out reader gets the answer, the failure sentence, and neither control.
+
+That change had a consequence worth catching — the design reference page's
+failed card lost its retry too, since it never passed a handler. It now replays
+the fixture turn, which is the honest fixture equivalent of asking that model
+again.
+
+**Known and deliberately not fixed here:** a model that stops being free _after_
+a thread is created still gets called on that thread's follow-ups. The line-up is
+checked when it is set, not on every call. Re-checking per call would be one
+cached read, but it would also strand a live thread the moment a list changed
+under it, and the failure that produces is not the one the caller could have
+avoided. Worth a decision of its own rather than a quiet addition to this one.
+
 **What still needs a person**, because there is no browser automation here by
 decision: Clerk's `<Show>` renders nothing server-side, so the signed-in send
 control and the signed-out "Sign in to send" both appear only after hydration —
@@ -753,6 +817,7 @@ whole loop.
 - [x] `app/dev-stream/` deleted — the real arena replaces it
 - [x] Found and fixed a negative token count reaching the screen, and the generation speed that would have been invented from it
 - [x] Verified by hand against a running server: three models streaming independently, one failing without touching the other two, a vote landing, a follow-up continuing each model's own history, and a reload reading it all back
+- [x] Review pass: the caller-supplied line-up is validated server-side, threads predating `modelIds` are backfilled and can no longer hide their own answers, and a reader is not offered a retry that can only fail
 - [x] Typecheck, lint, format, and a real build all clean
 - [ ] Send a real prompt while signed in, in a browser: three cards fill at once on one time axis, picking a winner marks it and updates the top bar, a follow-up continues each model's own thread — needs a person
 - [ ] Check the same screen at mobile width and with reduced motion on — needs a person

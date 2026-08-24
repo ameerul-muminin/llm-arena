@@ -3,6 +3,9 @@
 import { auth } from "@clerk/nextjs/server";
 import { request as arcjetRequest } from "@arcjet/next";
 
+import { getFreeModels } from "@/features/catalogue/catalogue";
+import { CATALOGUE_UNAVAILABLE } from "@/features/catalogue/copy";
+import { checkLineUp } from "@/features/catalogue/selection";
 import { failure } from "@/features/model-call/failures";
 import type { ModelCallFailure } from "@/features/model-call/types";
 import { describeDecisionForLog, toProtectionOutcome } from "@/features/model-call/protection";
@@ -40,6 +43,44 @@ const refused = (message: string): StartTurnResult => ({ ok: false, message });
 const asRefusal = (called: ModelCallFailure): StartTurnResult => refused(called.message);
 
 /**
+ * Creating a thread, or adding to one.
+ *
+ * Only a new thread takes a line-up from the caller at all — a follow-up asks
+ * whoever the thread already stores, which is what makes the lock real rather
+ * than a rule the browser is trusted to follow. And the line-up it is given is
+ * checked against the live free list rather than believed: the picker that
+ * constrains this is a control in someone's browser, and this is the action
+ * sitting behind it.
+ *
+ * A catalogue we cannot read is a refusal, not a shrug. Every card in this app
+ * prints `$0.0000` on the strength of that list, so sending a prompt to models
+ * nobody has confirmed are free is the one failure mode worth stopping the app
+ * for. The list is cached for an hour and shared, so this is a rare minute.
+ */
+const start = async (
+  ownerId: string,
+  threadId: string | null,
+  prompt: string,
+  requested: readonly string[],
+): Promise<StartTurnResult> => {
+  if (threadId !== null) {
+    const appended = await appendTurn({ threadId, ownerId, prompt });
+    return appended.ok
+      ? { ok: true, threadId, turnId: appended.value.turnId, ordinal: appended.value.ordinal }
+      : refused(appended.message);
+  }
+
+  const catalogue = await getFreeModels();
+  if (!catalogue.ok) return refused(CATALOGUE_UNAVAILABLE);
+
+  const lineUp = checkLineUp(catalogue.models, requested);
+  if (!lineUp.ok) return refused(lineUp.message);
+
+  const created = await createThread({ ownerId, prompt, modelIds: lineUp.modelIds });
+  return { ok: true, threadId: created.threadId, turnId: created.turnId, ordinal: 0 };
+};
+
+/**
  * Create the thread and its first turn, or append a turn to one that exists.
  *
  * The write happens before a single model is called, which is what stops three
@@ -59,10 +100,6 @@ export async function startTurn(input: {
   if (prompt.length > MAX_PROMPT_LENGTH) {
     return refused("That prompt is too long to send.");
   }
-  if (input.threadId === null && input.modelIds.length === 0) {
-    return refused("Pick at least one model to ask.");
-  }
-
   const { userId } = await auth();
   if (userId === null) return refused(failure("sign-in-required").message);
 
@@ -89,23 +126,7 @@ export async function startTurn(input: {
     return asRefusal(outcome.failure);
   }
 
-  const threadId = input.threadId;
-
-  const started: StartTurnResult =
-    threadId === null
-      ? await createThread({ ownerId: userId, prompt, modelIds: input.modelIds }).then(
-          (created) => ({
-            ok: true,
-            threadId: created.threadId,
-            turnId: created.turnId,
-            ordinal: 0,
-          }),
-        )
-      : await appendTurn({ threadId, ownerId: userId, prompt }).then((result): StartTurnResult =>
-          result.ok
-            ? { ok: true, threadId, turnId: result.value.turnId, ordinal: result.value.ordinal }
-            : refused(result.message),
-        );
+  const started = await start(userId, input.threadId, prompt, input.modelIds);
 
   if (!started.ok) return started;
 
@@ -116,7 +137,6 @@ export async function startTurn(input: {
       thread_id: started.threadId,
       turn_id: started.turnId,
       ordinal: started.ordinal,
-      model_count: input.modelIds.length,
       new_thread: input.threadId === null,
     },
   });

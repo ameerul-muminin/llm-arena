@@ -78,6 +78,15 @@ export const FixtureTurn = ({ prompt, showReplay = true, className }: FixtureTur
             onPick={() => {
               setWinner(fixture.modelId);
             }}
+            /*
+             * The failed card only offers a retry when something is there to
+             * retry into — see `AnswerCard`. Replaying the turn is the honest
+             * fixture equivalent of asking that model again.
+             */
+            onRetry={() => {
+              setWinner(null);
+              setRunId((id) => id + 1);
+            }}
           />
         ))}
       </div>

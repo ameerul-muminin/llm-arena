@@ -65,7 +65,7 @@ export const ThreadArena = ({
           <TurnBoard
             key={turn.id}
             turn={turn}
-            canVote={isOwner}
+            isOwner={isOwner}
             voteMessage={arena.voteMessages.get(turn.id)}
             onPick={(modelId) => {
               arena.pick(turn.id, modelId);

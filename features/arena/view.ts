@@ -70,13 +70,27 @@ const stateOf = (response: StoredResponse): AnswerState =>
  * called — refused before it got that far, or the browser left mid-stream — and
  * an empty card claiming otherwise would be the fabricated row feature 3 turned
  * down.
+ *
+ * **The line-up decides the order, never what is shown.** Anything that
+ * answered gets a card even if it is not in the line-up, because it genuinely
+ * did answer and the page's job is to say what happened. Filtering by the
+ * line-up alone was a real bug for a moment: threads created before that column
+ * existed read back with an empty one, and every stored answer silently vanished
+ * from the page while the thread still listed its prompts.
  */
 export const storedTurnView = (
   thread: StoredThread,
   turn: StoredTurn,
   nameOf: (modelId: string) => string,
 ): TurnView => {
-  const responses = thread.modelIds.flatMap((modelId): readonly ResponseView[] => {
+  const ordered = [
+    ...thread.modelIds,
+    ...turn.responses
+      .map((response) => response.modelId)
+      .filter((modelId) => !thread.modelIds.includes(modelId)),
+  ];
+
+  const responses = ordered.flatMap((modelId): readonly ResponseView[] => {
     const response = turn.responses.find((candidate) => candidate.modelId === modelId);
     if (response === undefined) return [];
     return [

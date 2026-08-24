@@ -24,18 +24,23 @@ const MIN_ANSWERS_TO_VOTE = 2;
 
 type TurnBoardProps = {
   readonly turn: TurnView;
-  /** Only a thread's owner can vote in it, so only they see the control. */
-  readonly canVote: boolean;
+  /**
+   * Only a thread's owner can write to it, so only they get the controls that
+   * would. Both picking a winner and retrying a failed call are writes the
+   * server refuses from anyone else, and a control that can only fail is worse
+   * than no control.
+   */
+  readonly isOwner: boolean;
   /** A refused vote's plain sentence. */
   readonly voteMessage?: string;
   readonly onPick: (modelId: string) => void;
   readonly onRetry: (modelId: string) => void;
 };
 
-export const TurnBoard = ({ turn, canVote, voteMessage, onPick, onRetry }: TurnBoardProps) => {
+export const TurnBoard = ({ turn, isOwner, voteMessage, onPick, onRetry }: TurnBoardProps) => {
   const scaleMs = axisScaleFor(turn.responses.map((response) => response.span));
   const judged = turn.winnerModelId !== null;
-  const canPick = canVote && !judged && answeredCount(turn) >= MIN_ANSWERS_TO_VOTE;
+  const canPick = isOwner && !judged && answeredCount(turn) >= MIN_ANSWERS_TO_VOTE;
 
   return (
     <section className="space-y-4" aria-label={`Prompt ${String(turn.ordinal + 1)}`}>
@@ -59,9 +64,13 @@ export const TurnBoard = ({ turn, canVote, voteMessage, onPick, onRetry }: TurnB
             onPick={() => {
               onPick(response.modelId);
             }}
-            onRetry={() => {
-              onRetry(response.modelId);
-            }}
+            onRetry={
+              isOwner
+                ? () => {
+                    onRetry(response.modelId);
+                  }
+                : undefined
+            }
           />
         ))}
       </div>
