@@ -1,26 +1,290 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
+/*
+ * The whole visual language of this app, in one file.
+ *
+ * `CLAUDE.md` says shared color and spacing live here or in a shared component
+ * and are never copy-pasted as raw Tailwind classes. So this is the only file in
+ * the project allowed to contain a hex value. Everything else reaches for a
+ * token by name.
+ *
+ * Two vocabularies live here and they must not be confused:
+ *
+ *   1. Ours, below, named for what the thing *is* — `--rust`, `--win`,
+ *      `--ground`, `--axis`.
+ *   2. shadcn's, named for what a component *slot* is — `--primary`, `--muted`,
+ *      `--ring`. Those are mapped onto ours further down, so an unmodified
+ *      shadcn component comes out already wearing this design.
+ *
+ * One clash is worth knowing about before it bites: **shadcn's `--accent` is not
+ * our accent.** In shadcn's vocabulary `--accent` is the faint surface tint
+ * behind a hovered menu row. Our design accent — rust, the one thing the brief
+ * says marks interaction — is shadcn's `--primary`. Reaching for `bg-accent`
+ * expecting rust would silently produce a brown smudge.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Light mode. A warm parchment ground, not white — the brief rules out neutral
+ * grey and true black, and inverting a dark design into a white one would land
+ * exactly there.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --ground: #faf4ed;
+  --surface: #fffcf7;
+  --surface-raised: #f3e9dc;
+  /*
+   * Two line weights, and the difference is not cosmetic.
+   *
+   * `--line` is the quiet hairline between surfaces — card edges, table rules,
+   * dividers. It is decorative: a card is already delineated by its own
+   * background, so the line is not carrying the boundary on its own.
+   *
+   * `--line-strong` is the boundary of an actual control — an outline button, an
+   * input. WCAG asks 3:1 of those, and the first pass of this palette failed it
+   * at 1.72:1, which is an outline button whose edge you essentially cannot see.
+   * These values clear 3:1 against ground, surface, and raised alike.
+   */
+  --line: #e3d6c8;
+  --line-strong: #8f7660;
+
+  --ink: #241a15;
+  --ink-muted: #6b594c;
+
+  --rust: #a8401f;
+  --rust-hover: #8e3517;
+  --rust-ink: #fff6ef;
+
+  --win: #2f7d4f;
+  --fail: #b03a28;
+
+  /* The shared time axis. Deliberately neutral: rust is reserved for what you
+     interact with, and letting a measurement bar borrow it spreads the accent
+     until it stops meaning anything. */
+  --axis-track: #e3d6c8;
+  --axis-fill: #8c7866;
+  --axis-mark: #241a15;
+
+  --radius: 0.5rem;
+}
+
+/*
+ * Dark mode, and the primary one. Coffee, not charcoal: every channel stays warm
+ * and red-dominant so the ground reads as brown rather than as a black that
+ * happens to be tinted.
+ */
+.dark {
+  color-scheme: dark;
+
+  --ground: #17110e;
+  --surface: #1e1714;
+  --surface-raised: #261d19;
+  --line: #332721;
+  /* See the light-mode note: control boundaries must clear 3:1, hairlines need not. */
+  --line-strong: #8a7365;
+
+  --ink: #f2e9e1;
+  --ink-muted: #b3a296;
+
+  /*
+   * Not the first rust tried. `#c8532a` was the intuitive pick and it fails the
+   * exact check the brief warns about: 4.17:1 against the ground as link text,
+   * and 3.71:1 with parchment text sitting on it as a button fill. Both
+   * directions under 4.5. This one is 5.50:1 against the ground, and a button —
+   * rust fill, near-black-brown label — is the same 5.50:1 read the other way.
+   */
+  --rust: #e2673b;
+  --rust-hover: #f07e52;
+  --rust-ink: #1a120e;
+
+  --win: #7fc08c;
+  --fail: #e8806f;
+
+  --axis-track: #332721;
+  --axis-fill: #8a7668;
+  --axis-mark: #f2e9e1;
+}
+
+/*
+ * shadcn's slots, mapped onto the tokens above. Editing anything here changes
+ * every shadcn component at once, which is the point — a component should never
+ * need a one-off color prop.
+ */
+:root,
+.dark {
+  --background: var(--ground);
+  --foreground: var(--ink);
+
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink);
+
+  /* Our accent. See the note at the top about the name. */
+  --primary: var(--rust);
+  --primary-foreground: var(--rust-ink);
+
+  --secondary: var(--surface-raised);
+  --secondary-foreground: var(--ink);
+
+  --muted: var(--surface-raised);
+  --muted-foreground: var(--ink-muted);
+
+  /* shadcn's hover tint, *not* the design accent. */
+  --accent: var(--surface-raised);
+  --accent-foreground: var(--ink);
+
+  --destructive: var(--fail);
+
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--rust);
+
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--rust);
+  --sidebar-primary-foreground: var(--rust-ink);
+  --sidebar-accent: var(--surface-raised);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--rust);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Ours, exposed to Tailwind so app code says `text-win`, never a hex. */
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-rust: var(--rust);
+  --color-rust-hover: var(--rust-hover);
+  --color-rust-ink: var(--rust-ink);
+  --color-win: var(--win);
+  --color-fail: var(--fail);
+  --color-axis-track: var(--axis-track);
+  --color-axis-fill: var(--axis-fill);
+  --color-axis-mark: var(--axis-mark);
+
+  --font-sans: var(--font-instrument-sans);
+  --font-mono: var(--font-plex-mono);
+  --font-heading: var(--font-instrument-sans);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  /*
+   * Four heading steps and nothing more. This app has no hero and does not need
+   * one; a wider scale would only invite decoration.
+   */
+  --text-display: 1.75rem;
+  --text-title: 1.25rem;
+  --text-body: 0.9375rem;
+  --text-detail: 0.8125rem;
+  --text-micro: 0.6875rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground;
+    font-size: var(--text-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Visible focus is a baseline requirement in `CLAUDE.md`, not a preference, so
+   * it is set once here rather than remembered per component. The offset is
+   * painted in the ground color so the ring stays legible whether the control
+   * sits on the page or on a raised card.
+   */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+
+  /*
+   * Respecting this is part of the same baseline. The time axis reads its final
+   * state directly rather than animating into it, so nothing is lost — the
+   * information was never in the movement.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/*
+ * Monospace means "this is a number we measured, or a name a provider gave us".
+ * Prose never wears it, a measurement never goes without it. Applying it through
+ * one utility is what keeps that rule true by construction instead of by
+ * everyone remembering to add `font-mono tabular-nums` in the same three places.
+ */
+@utility measured {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * The small all-caps label above a measured value.
+ *
+ * Deliberately sets no color. It very nearly did, and that would have been a
+ * quiet bug: the time axis prints its caption in `--fail` when a call stops
+ * short, and a color baked into the utility would have sat in the same cascade
+ * layer as `text-fail` and won or lost by declaration order rather than by
+ * intent. Callers state the color; this owns the shape.
+ */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
