@@ -3,6 +3,7 @@ import { namerFor } from "@/features/catalogue/naming";
 import { findThread } from "@/features/thread/queries";
 import { standingsFor } from "@/features/thread/standings";
 import { threadTitle } from "@/features/thread/title";
+import { guardThreadRead } from "@/features/shell/guard-read";
 import { ThreadBar } from "@/features/shell/thread-bar";
 
 /**
@@ -20,6 +21,11 @@ import { ThreadBar } from "@/features/shell/thread-bar";
 export const dynamic = "force-dynamic";
 
 export default async function ThreadTopBarSlot({ params }: PageProps<"/thread/[id]">) {
+  // A parallel slot renders independently of the page beside it, so it reaches
+  // the database on its own and has to guard on its own. Deduped per request
+  // with the other two entry points.
+  await guardThreadRead();
+
   const { id } = await params;
   const thread = await findThread(id);
   if (thread === null) return null;

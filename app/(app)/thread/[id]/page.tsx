@@ -6,6 +6,7 @@ import { ThreadArena } from "@/features/arena/thread-arena";
 import { storedTurnViews } from "@/features/arena/view";
 import { getFreeModels } from "@/features/catalogue/catalogue";
 import { namerFor } from "@/features/catalogue/naming";
+import { guardThreadRead } from "@/features/shell/guard-read";
 import { findThread } from "@/features/thread/queries";
 import { threadTitle } from "@/features/thread/title";
 
@@ -33,6 +34,11 @@ import { threadTitle } from "@/features/thread/title";
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: PageProps<"/thread/[id]">): Promise<Metadata> {
+  // Guarded here as well as in the page, because this is often the first of the
+  // three entry points to reach the database. Deduped per request, so all three
+  // guarding still costs one decision and one token.
+  await guardThreadRead();
+
   const { id } = await params;
   const thread = await findThread(id);
   return {
@@ -42,6 +48,8 @@ export async function generateMetadata({ params }: PageProps<"/thread/[id]">): P
 }
 
 export default async function ThreadPage({ params, searchParams }: PageProps<"/thread/[id]">) {
+  await guardThreadRead();
+
   const { id } = await params;
   const thread = await findThread(id);
   if (thread === null) notFound();

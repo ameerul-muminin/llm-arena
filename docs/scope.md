@@ -16,17 +16,17 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 
 ## At a glance
 
-| #   | Feature                                     | Phase      | Status      |
-| --- | ------------------------------------------- | ---------- | ----------- |
-| 1   | Connecting to a model                       | Foundation | done        |
-| 2   | Coding standards & tooling                  | Foundation | done        |
-| 3   | Data model                                  | Foundation | done        |
-| 4   | Design & look                               | Foundation | done        |
-| 5   | Model picker                                | Slice 1    | done        |
-| 6   | Send a prompt, parallel streams, and voting | Slice 1    | done        |
-| 7   | App shell & thread history                  | Slice 2    | done        |
-| 8   | Public thread visibility & sharing          | Slice 3    | done        |
-| 9   | Leaderboard: global & personal              | Slice 4    | not started |
+| #   | Feature                                     | Phase      | Status   |
+| --- | ------------------------------------------- | ---------- | -------- |
+| 1   | Connecting to a model                       | Foundation | done     |
+| 2   | Coding standards & tooling                  | Foundation | done     |
+| 3   | Data model                                  | Foundation | done     |
+| 4   | Design & look                               | Foundation | done     |
+| 5   | Model picker                                | Slice 1    | done     |
+| 6   | Send a prompt, parallel streams, and voting | Slice 1    | done     |
+| 7   | App shell & thread history                  | Slice 2    | done     |
+| 8   | Public thread visibility & sharing          | Slice 3    | done     |
+| 9   | Leaderboard: global & personal              | Slice 4    | deciding |
 
 ## Verification pass, 2026-08-17
 
@@ -1033,6 +1033,7 @@ Files: `features/shell/` gains `copy-link.tsx`, `not-found-notice.tsx`, and `pag
 - [x] Signed-out sidebar says what a signed-out visitor can actually do
 - [x] `noindex` on the thread route, and only there
 - [x] Copy-link control in the top bar, for owner and visitor alike
+- [x] Review fix: that control's confirmation now says “only its owner”, not “only you”
 - [x] `findThread` deduped per request with `cache()` — measured at 3 to 1
 - [x] Typecheck, lint, format, and a real build all clean
 - [x] Verified signed-out against a running production server: a real thread reads, a bad id and a bad path are both our not-found page, and neither offers a control that would fail
@@ -1041,14 +1042,231 @@ Files: `features/shell/` gains `copy-link.tsx`, `not-found-notice.tsx`, and `pag
 
 What this feature deliberately does not include: any stored per-thread visibility, and rich link previews. Both are parked — the first in the decision above, the second on the "not doing right now" list.
 
+#### Review fix, 2026-08-26
+
+**The copy confirmation addressed every reader as the owner.** The control is deliberately universal — the checklist above says “for owner and visitor alike”, and the component's own note says sharing is not the owner's exclusive act — but the sentence it produced said “only _you_ can add to it.” For a signed-out visitor, or any signed-in person who did not start the thread, that is false. It was false on the same screen that replaces the composer with “This thread belongs to someone else, so you can read it but not add to it”, so one feature was telling one reader two contradictory things about the same permission, roughly a screen apart.
+
+Worse than a wording slip, because that string is not only displayed. It is the text of the `role="status"` live region this feature deliberately added, so the false version was announced as well as shown — and announced to the audience with the least other evidence on screen about who owns what.
+
+It now reads “only its owner can add to it.” Third person is true for both audiences, which is the only thing a sentence attached to a control shown to both can afford to be. The general rule, worth keeping: **a control rendered for everyone cannot carry second-person copy about a permission not everyone has.** Nothing else in the app broke it — the read-only notice is already phrased for the person who sees it, and it is the only other place that says anything about who can write.
+
+Caught reading the code, not at a browser. The manual check still open above — pressing copy-link in both themes and confirming the copied link carries no `?live=` — is unaffected and still needs a person; it now also covers reading the corrected sentence.
+
+One file: `features/shell/copy-link.tsx`. Typecheck, lint, format, and a real build all clean.
+
 ## Slice 4: Leaderboard
 
 ### 9. Leaderboard: global & personal
 
 Two leaderboards from the same votes, one for everyone, one just for the signed-in user. Each row's win rate is the big, bold number, in the accent color, with a small bar next to it, always written as "won 4 of 5," never a bare percentage or a made-up score. Smaller, quieter numbers underneath for average speed and time-to-first-token, each clearly labeled. No cost or "cheapest" stat, every model is free, so that number never means anything here. First place gets a subtle highlight, nobody else does.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### Decided
+
+The screen already exists, framed and styled, on invented rows. So this feature is not a design job — feature 4 built `WinRate`, the table, and the placeholder note that marks the lie, and the page's own comment already promises that "feature 9 replaces the rows with aggregates over real votes and nothing about this screen has to change". That promise turned out to be _nearly_ true. One thing does have to change, and it is the one below about which speed number.
+
+**One aggregate shape, two scopes, parameterised by an optional owner id.** Global is every thread; personal is threads the signed-in person owns. Not two queries, not two ranking rules, not two tables — the same function called twice, because "just for the signed-in user" is a filter on the input, not a different kind of standing.
+
+**Personal filters on the thread's owner, not on `voterId`, and the two are provably the same set.** `castVote` refuses a non-owner, so every vote in a thread was cast by that thread's owner; there is no possible row where the two disagree. Given that, owner is the better filter for one reason that matters: the win record and the speed averages then describe _the same calls_. Filtering wins by `voterId` and speed by owner would have been two different slices printed on one row, which is the sort of thing that reads fine and quietly is not one fact.
+
+**The denominator is the one feature 6 already built, moved from a fold into SQL.** A turn counts for a model only if that model answered it _and_ the turn was judged. `features/thread/standings.ts` states the reasoning at length and it is unchanged here: a model that failed on a judged turn was never in that comparison, and counting it as a loss blames it for a race it did not run. Two implementations of one rule is a drift risk, and it is accepted deliberately rather than shared — a per-thread fold over turns the page has already read and a cross-thread SQL aggregate have nothing to usefully share but the sentence, and the sentence is written in both places.
+
+**Three `groupBy` calls, not one raw query.** Per model: answered responses (a count plus `_avg` of time-to-first-token and end-to-end tokens/sec), answered-and-judged responses (the denominator), and wins. Combined in a pure function. `$queryRaw` would do it in one round trip and would hand back rows this project has to hand-type, which under the no-`any` rule means writing a type that claims what the SQL returns with nothing checking the claim. Three small indexed aggregates against `@@index([modelId])` is the cheaper mistake.
+
+**The tokens/sec column is `endToEndTokensPerSecond`, and the fixture page had the wrong one.** Feature 1 settled this in writing — "**The leaderboard ranks on this one.** Ranking on generation speed would silently exclude every buffering model" — because `tokensPerSecond` is `null` by design for an answer that arrived in one flush. `AVG` skips nulls, so averaging generation speed would not have looked broken; it would have quietly produced a leaderboard about streaming models only. Labelled **Overall**, the same word `MetricsRow` uses, so a reader who has seen an answer card already knows which of the two speeds this is.
+
+**Only models the arena has actually run.** Listing the catalogue would be some sixty rows of em dashes, and a screen that is 95% "no data" is not a leaderboard. A model appears once it has a stored response. Names come from `getFreeModels()` and `namerFor`, which already answers for a slug that has stopped being free — the case feature 5 measured and feature 9 inherits, since a thread from last month can name a model this month's list has dropped.
+
+**Ranking is pure win rate, ties broken by more judged turns; models with nothing judged sort last.** Asked, because a reasonable person could go three ways and it changes what the top row means. The alternative was a minimum-votes threshold with an unranked group below it, which is more honest in the abstract and useless in fact: at the vote counts this app will have for a while, every model lands in the bottom group and the ranked table reads as empty. Sorting by absolute wins was the other option and it is worse — it makes the order disagree with the column it sits next to, since win rate stays the headline number. Pure rate is safe here only because of something feature 4 already built: `WinRate` never prints a percentage without the count behind it, so a model at the top on one vote says "won 1 of 1" in the same breath. The design already refuses to let a thin record look thick.
+
+**The toggle is a URL parameter, not client state.** `?scope=personal`, two links styled as a segmented control, with `aria-current` on the active one. Server-rendered, so no first paint at the wrong tab and no hydration flash; linkable, so a personal board is a place rather than a state; and it needs no client component at all. The page is already `force-dynamic` in spirit — real vote counts must never be frozen into build-time HTML, and reading `searchParams` makes that structural rather than remembered.
+
+**The toggle is shown only when signed in.** A Personal tab a signed-out visitor cannot use is precisely the defect feature 8's review fix wrote up: a control rendered for everyone that only works for some. Hiding it costs a signed-out visitor the knowledge that a personal board exists, which is a smaller cost than a dead control, and they find out the moment they sign in.
+
+**Two empty states, because there are two.** Nothing run yet is a plain sentence. Run but never judged is the table itself, with em dashes where the rates would be — `WinRate` already renders that correctly and prints an em dash rather than 0%, since printing zero would claim a model lost. A personal board with nothing in it is a third and gets its own sentence, about this person's own threads rather than about the app.
+
+**No cost column, and this is the one place worth saying why out loud.** Every other screen shows `$0.0000` because it is a real measured number. Here it would be a column of identical zeros restating a constant, and scope names that directly: "No cost or 'cheapest' stat, every model is free, so that number never means anything here." The schema agrees — `ModelResponse` has no cost column at all.
+
+Files: new `features/leaderboard/` (`types.ts`, `queries.ts`, `ranking.ts`, `copy.ts`, `table.tsx`, `scope-toggle.tsx`), and `app/(app)/leaderboard/page.tsx` rewritten to read real data and drop its `PlaceholderNote`.
+
+#### What the build turned out to be
+
+Every decision above shipped as written. Feature 4's promise that "nothing about this screen has to change" held, with the one exception it was already predicted to have. Three things the plan did not anticipate, one of which is the best argument this project has yet produced for the rule that a build has to actually be run.
+
+**A generic helper for the aggregates typechecked, linted, and built cleanly, then failed on the very first real request.** The three grouped reads differ only in their `where` and in whether they average anything, so the first version was one function taking the averages as an argument and receiving `undefined` for the two that count without measuring. That is not the same as omitting `_avg`: Prisma still emits the selection, and the query engine rejects it with `The select statement for type ModelResponseAvgAggregateOutputType needs at least one truthy value`. Nothing in `tsc`, `eslint`, or `next build` can see that — the argument is well-typed, the call is valid, and the failure lives in a payload assembled at runtime. It is now two small functions, `countByModel` and `measureByModel`, which is also plainer to read than the generic was.
+
+**Prisma requires an `orderBy` on a grouped read**, even one whose order is about to be thrown away. Ordering by slug rather than by a count, deliberately: the ranking is a pure function over all three results at once and cannot be expressed in any one of their `ORDER BY` clauses, so the database's order only needs to be stable rather than meaningful. Sorting by a count here would look like the ranking and quietly not be it.
+
+**`PlaceholderNote` is deleted, because feature 9 was its last caller.** The component's own note said it existed to be "removed feature by feature rather than hunted for", and feature 7's verification pass had already observed it was "down to `/leaderboard` alone". A marker for unwired surfaces with no unwired surfaces left is dead code, and keeping it would invite a future stub to be marked rather than finished.
+
+**The live data made the 0% row real, and it is not the same as an em dash.** `winRate` returns `null` for a model nobody has judged and `0` for one that was judged and lost, and the database happened to contain the second: MiniMax M3 answered a turn, that turn was voted on, and it did not win. It prints "0%, won 0 of 1" — which is a fact, not a missing number — while an unjudged model would print an em dash. Two states that a zero-filled implementation would have collapsed into one.
+
+**Two models are correctly absent.** `google/gemma-4-26b-a4b-it:free` and `thinkingmachines/inkling-small:free` are in the database with nothing but failures. They have no metrics to average and were never in a comparison to win, so every cell of their row would be an em dash — that is no data at all rather than "no votes yet", and the two should not look alike.
+
+**Verified twice, by two independent paths, against real votes.** The board was computed once as a single raw SQL statement with conditional joins, and once by the app's three Prisma aggregates rendered through the page, and the two agree exactly:
+
+| #   | Model            | Win rate         | Avg. to first token | Avg. overall tokens/sec |
+| --- | ---------------- | ---------------- | ------------------- | ----------------------- |
+| 1   | Nemotron 3 Ultra | 100%, won 1 of 1 | 1.3s                | 66 tok/s                |
+| 2   | Ox Alpha         | 50%, won 1 of 2  | 17s                 | 29 tok/s                |
+| 3   | MiniMax M3       | 0%, won 0 of 1   | 6.6s                | 35 tok/s                |
+
+Also checked against a production server, signed out: `?scope=personal` typed by hand returns the global board with no toggle rendered, as do `?scope=garbage` and a repeated `?scope=personal&scope=global`; the placeholder note is gone from the markup; and the page carries no `robots` meta, so it stays indexable while the thread route does not — which is what feature 8 decided. The owner filter itself was exercised separately in SQL for three cases: everyone, the real owner (identical to global, since they own every thread in the database), and a stranger (empty, which is the personal empty state).
+
+The throwaway probe scripts were deleted after running, the same way features 2, 3, 4, and 8 handled theirs.
+
+Files: new `features/leaderboard/` — `types.ts`, `scope.ts`, `queries.ts`, `ranking.ts`, `copy.ts`, `table.tsx`, `scope-toggle.tsx`. `app/(app)/leaderboard/page.tsx` rewritten. `features/shell/placeholder-note.tsx` deleted.
+
+- [x] Decide the approach
+- [x] `features/leaderboard/queries.ts` — three grouped aggregates, batched, scoped global or to one owner
+- [x] `features/leaderboard/ranking.ts` — pure: combine the aggregates, rank by win rate, unjudged last
+- [x] The page reads real votes; fixtures and the placeholder note deleted
+- [x] Speed column switched to the end-to-end figure and labelled "Avg. overall tokens/sec"
+- [x] Global / Personal as a URL-scoped segmented control, signed-in only
+- [x] All three empty states written
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Verified against a production server, signed out, with real votes — matches a raw-SQL board computed independently
+- [ ] Sign in and confirm the Personal board renders, the toggle marks the current tab in both themes, and its focus ring is visible — needs a person
+- [ ] Confirm the two empty states on screen: a signed-in account with no threads, and one with answers but no vote yet — neither is reachable from the current database, so both need a person
+
+#### Review fix, 2026-08-27: the batched read needed an isolation level, not just a transaction
+
+Raised in review and valid. The comment at the top of `queries.ts` claimed the three aggregates were batched "in a transaction, not merely awaited together. Not for speed — for agreement", and said a vote landing mid-read "would produce a row claiming more wins than judged turns". The reasoning about the consequence was right. The claim that a transaction prevents it was wrong.
+
+Postgres defaults to `READ COMMITTED`, where a snapshot is taken per **statement**, not per transaction. Three statements inside one `BEGIN`/`COMMIT` can therefore see three different states of the table, which is exactly the interleaving the comment set out to rule out. Prisma's array-form `$transaction` inherits the database default, so nothing in the app was asking for anything stronger.
+
+Proven against this database rather than argued, because the whole point is that the intuitive reading of "transaction" is the wrong one. A scratch table, two connections, and two identical counts inside one reader transaction with the other connection committing an insert between them:
+
+| Isolation level   | First count | Second count | Verdict            |
+| ----------------- | ----------- | ------------ | ------------------ |
+| `READ COMMITTED`  | 0           | 1            | snapshots diverged |
+| `REPEATABLE READ` | 1           | 1            | one snapshot       |
+
+The visible damage was not subtle. `winRate` is `won / judged` with no clamp, and a vote landing between the `judged` read and the `won` read gives a model `won = judged + 1` — so the board would print "won 3 of 2" at 150%, and because the ranking sorts on that rate descending, the corrupted row would sort to **first place**. A wrong number that promotes itself to the top of the screen is the worst shape this bug could have taken.
+
+Fixed by naming the isolation level the comment was already relying on: `{ isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }`. `RepeatableRead` rather than `Serializable` because these are pure reads with nothing to serialise against, and a read-only `REPEATABLE READ` transaction in Postgres cannot raise a serialisation failure — so this needs no retry wrapper, which is the only reason the stronger level would have cost anything. `import type { Prisma }` became a value import, since the enum exists at runtime.
+
+**No clamp was added to `winRate`, deliberately.** Capping the rate at 100% would make this class of bug invisible instead of impossible, and the invariant now holds where it should — at the read, not at the formatter. `ModelTally.won`'s doc comment was corrected to say _why_ it is never greater than `judged`: it is a property of how the two counts are read together, not something the schema enforces.
+
+Re-verified: typecheck, lint, format, and a real build clean, and the board still renders its real numbers with every row satisfying `won <= judged` — Nemotron 1 of 1, Ox Alpha 1 of 2, MiniMax 0 of 1, unchanged from the table above. One thing that check did _not_ exercise: locally Arcjet logs `failed open on leaderboard: ALL_RULES`, because there is no client IP to fingerprint without `ARCJET_ENV=development`. That is feature 10's local-environment artifact and predates this fix, but it means the 200 above proves the aggregate ran, not that the rules ran.
+
+- [x] Found and fixed: batched reads at `READ COMMITTED` could report more wins than judged turns, and rank the bad row first
+
+## Slice 5: Hardening
+
+### 10. Hardening the public read surface
+
+Feature 8 opened a door and feature 9 widened it. A thread is readable by anyone with the link and the leaderboard is readable by anyone at all, so there are now unauthenticated requests reaching Postgres with nothing in front of them. This feature works out what can actually be abused, protects the parts that can, and writes down the parts that cannot so nobody has to rediscover them.
+
+#### What was already there, and what it did not cover
+
+Every Arcjet rule in the app is `mode: "LIVE"`, and all of them sit on authenticated write paths:
+
+| Rule                                          | Client        | Called from            |
+| --------------------------------------------- | ------------- | ---------------------- |
+| `shield`                                      | base          | inherited              |
+| `detectBot({ allow: [] })`                    | base          | inherited              |
+| `detectPromptInjection`                       | `ajStartTurn` | the `startTurn` action |
+| `tokenBucket` 30 / 10 per min, keyed `userId` | `ajModelCall` | `POST /api/model-call` |
+
+The base client is never used directly, only the two derived from it, so shield and bot detection covered exactly two endpoints rather than the site. Every public page had nothing. And `pickWinner`, in the same file as the protected action, had nothing either — an authenticated write doing a read plus a transaction, with no limit of any kind.
+
+#### What can actually be abused, and what cannot
+
+Ruled out first, because two obvious-sounding risks are not real here:
+
+- **Thread id enumeration.** Real ids are 24-character cuid2 — `rdihouicisk7ptr8vndvxesp` — which is about 2^122. Feature 8's claim that the link is the key holds. Checked against live rows rather than assumed.
+- **`/` and `/models` as a database vector.** Neither touches Postgres. The catalogue fetch behind them is shared and cached for an hour, so a flood costs a React render and nothing else. Protecting them would add a decision round trip to the two lightest pages in the app to defend nothing.
+
+What is real:
+
+- **Hammering a shared thread.** The genuinely asymmetric read: one cheap `GET` pulls every turn, every response, and every full answer body, so a long thread is hundreds of kilobytes per request. It cannot be page-cached, because the owner and a visitor render differently.
+- **Hammering `/leaderboard`.** One `GET` becomes three aggregates over the whole response table. Cheap at today's six rows; the amplification is fixed while the scan cost grows with every prompt anyone sends.
+- **`pickWinner`.** Not the unauthenticated question, but a known unprotected write found while answering it, and cheap to close in the same pass.
+
+#### Ruled in
+
+**A second client, because the deadline is the problem.** The existing client sets a five-second decision deadline, raised deliberately because prompt injection timed out at the default and a rule that silently never runs is worse than no rule. That deadline must not sit on a page render: it would mean a bad moment at Arcjet stalls every public page for five seconds, which is a worse availability story than the abuse being defended against. So public reads get their own client at one second — enough for shield and bot detection, which the earlier verification pass already measured as answering well inside the 500ms default.
+
+**`detectBot`, and the existing configuration could not be reused.** This is the strongest single move: both routes are exactly what the reference calls an endpoint a script finds. But `allow: []` denies verified search engines, and feature 8 decided `/leaderboard` and `/models` stay indexable while the thread route does not. So the allow-list differs by route, and each one falls straight out of a decision feature 8 already made:
+
+- The thread route allows nothing. It is already `noindex`, and rich link previews are already parked, so there is no bot with business there.
+- The board allows `CATEGORY:SEARCH_ENGINE` and `CATEGORY:PREVIEW`. It is a product page that is meant to be found and meant to unfurl.
+
+**`slidingWindow`, not `tokenBucket`.** The bucket is right for model calls because one prompt costs one to three of them, so the variable `requested` amount carries real information. A page view always costs exactly one page view, so that machinery would buy nothing, and a sliding window avoids the boundary burst a fixed window allows. Sixty a minute on the thread route, thirty on the board — a real reader loads once and refreshes occasionally, and the owner's `router.refresh()` fires once per turn, once per retry, and once per vote, so even an active session is nowhere near either number.
+
+**Keyed by IP, which is the thing feature 3 deliberately moved away from.** Pulling Clerk forward was partly to stop an office behind one NAT sharing a single allowance. An anonymous reader has no id, so IP is the only key that exists, and the choice is being made again rather than forgotten. It is acceptable here only because the consequence differs: on a write path a shared allowance costs someone their ability to use the app, while here it costs a shared link a slow page, and the limits are set high enough that it should not happen at all.
+
+**Cache the global board, which matters more than the rate limit does.** Signed-out leaderboard output is byte-identical for every visitor, so a cached aggregate turns a flood from three queries per request into zero. That is a structural fix rather than a decision made per request, and it beats asking a remote service whether each visitor may run the same three queries again. Arcjet's job is what survives the cache.
+
+Only the global board is cached. The personal one requires an account, so it is not the anonymous vector, and leaving it live means the person most likely to have just voted sees their own vote immediately.
+
+**The thread read is deliberately not cached, and this is the one place the obvious idea was rejected.** Caching `findThread` would be the same structural win, and it would need `revalidateTag` on `createThread`, `appendTurn`, `recordAnswer`, `recordFailure`, and `castVote` — including from inside the streaming route, per model, many times per turn. Getting that wrong does not degrade a defence, it breaks the product: `router.refresh()` would re-render against stale data and a follow-up would appear not to have happened. A hardening pass is the wrong moment to take that risk, so the thread route is defended by Arcjet alone and the reason is recorded here rather than left looking like an oversight.
+
+**`pickWinner` joins the fast client**, with bot detection and a sliding window of twenty a minute keyed by the Clerk user. A vote is one row per turn and cannot be recast, so the natural ceiling is already low; this is about a script, not a person.
+
+**A denied read answers `403`, through `forbidden()`.** Which needs `experimental.authInterrupts`, and behaves exactly like the `notFound()` finding feature 8 measured and wrote up: the status and the boundary are correct, and the body ships as flight rather than as HTML. That is a downside for a human and the right answer for a scraper, which gets a correct status and a fraction of the page. Consistency with the 404 path is the reason to accept the flag rather than render a refusal at `200` — this project does not put a status on a response that contradicts what happened.
+
+#### Ruled out
+
+- **`detectPromptInjection` on a read path.** Nothing there carries text to a model. It is already in the one place it belongs, and feature 6 moved it there specifically to stop it running three times per prompt.
+- **`filter`, for VPN, Tor, or country.** It would punish a privacy-conscious reader of a shared link to defend against nothing this app has seen, and there is no geographic story here. Worth remembering only because it can be configured remotely without a redeploy, which makes it a tool for during an incident rather than before one.
+- **`validateEmail` and `protectSignup`.** Clerk owns signup end to end; Arcjet never sees that request.
+- **Guard, `@arcjet/guard`.** There is no non-HTTP protection site in this app — every one has a request or a server action context. This changes only if model calls ever move to a queue.
+- **`moderateContent`.** Guard-only, so ruled out by the above, and moderating model output is a product decision nobody has asked for.
+- **`sensitiveInfo`.** Ruled out for this problem, and the one worth revisiting. A public thread republishes whatever its owner pasted into a prompt, but that belongs on the write path in `startTurn`, before anything is stored, and "do we refuse a prompt containing a card number" is a product question rather than a hardening fix.
+
+#### Known gaps, written down rather than fixed
+
+- **`/ingest/*` is an open relay to PostHog under this app's own domain.** Anyone can post arbitrary bodies through it. It is a `next.config.ts` rewrite, resolved before any route code exists, so the only place to intercept it is `proxy.ts` — and Arcjet must not run from middleware. Closing it means turning the rewrite into a route handler, which changes how PostHog's own client is wired and is not this feature.
+- **Remote rules were not checked.** `arcjet auth status` reports the CLI session expired, and re-authenticating is a browser device flow. Anything configured in the Console rather than in code is invisible to this write-up.
+- **`curl` is now denied on both protected routes**, which is correct and is also a change to how this project verifies things. Every check from here needs a browser user agent, and a bare `curl` returning `403` is the protection working rather than the page being broken.
+
+#### What the build turned out to be
+
+Every decision above shipped. Four things the plan did not anticipate, and one of them was a defect in the coverage measurement this feature was adding.
+
+**The guard has to be deduped, and the reason is one the plan missed entirely.** A thread page reads the database from three places — `generateMetadata`, the page, and the top bar's parallel slot — which feature 8 already found and fixed with `cache()`. The same fact bites here twice over: if only the page guards, whichever of the other two runs first does the expensive read unprotected, and if all three guard naively that is three decisions and three tokens off a limit meant to count page views. So `guardThreadRead` is itself wrapped in `cache()`, which makes "every entry point guards" and "one decision per request" the same statement. Without it the sliding window would have counted every thread view as three.
+
+**`revalidateTag` is not the right call in Next 16, and the compiler said so.** It now takes a mandatory second argument naming an expiry profile, and its own doc comment points server actions at `updateTag` instead, for read-your-own-writes. That is exactly this case: the voter's screen refreshes immediately after the vote and has to show it. Caught by `tsc` rather than by a stale board in a browser.
+
+**The coverage check this feature added did not catch the one failure it actually saw.** Running locally with no client IP, the sliding window could not build a fingerprint, so the whole decision errored, every rule failed open, and every guarded page returned `200`. `unevaluatedRules` maps over `decision.results` — and on an errored decision that list is empty, so it reported full coverage for a request nothing had screened. It now checks `decision.isErrored()` as well, and reports `ALL_RULES`. Verified by reproducing the exact condition: a server started without `ARCJET_ENV` now logs `[arcjet] failed open on leaderboard: ALL_RULES` where it previously logged nothing at all. The model-call route was never exposed to this, because it handles `isErrored()` separately and always has.
+
+**`ARCJET_ENV=development` is now a real local-development requirement, and it was not before.** Every rule that existed until now keyed on `userId`, which localhost supplies fine. The moment a rule keys on IP, localhost has none, and the failure is not a quiet degradation — it is total, and it looks like the feature simply not working. Documented in `.env.example` next to the key, commented out, with the reason.
+
+#### Verified against a production server
+
+| Check                                    | Result                                                         |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| Bare `curl`, both guarded routes         | `403`, logged `reason=BOT`                                     |
+| Realistic browser headers, both routes   | `200`                                                          |
+| `/` and `/models`, either client         | `200` — deliberately unguarded                                 |
+| 40 browser requests at `/leaderboard`    | exactly 30 × `200` then 10 × `403`, logged `reason=RATE_LIMIT` |
+| 20 board renders inside one cache window | 2 database transactions, not 20                                |
+| An unmatched path                        | still `404`, unaffected                                        |
+
+The rate limit landing on exactly thirty is the sliding window's configured `max`, which is the number worth seeing rather than "roughly the right shape".
+
+The cache was measured against Postgres's own `xact_commit` counter rather than by instrumenting the app, with the probe's own overhead measured separately and subtracted — two back-to-back probe runs cost one commit each, so four commits across twenty renders is two renders' worth of real work.
+
+**A denied read is `403` with the body in flight, exactly as predicted.** Confirmed rather than assumed: the response carries `403`, the correct `<title>`, and no `<h1>` or `<main>` anywhere — the sentence appears only inside the `self.__next_f.push` payload. Same mechanism, same finding as feature 8's `notFound()` investigation. It is 16,450 bytes against 57,820 for the allowed thread page, and that thread has a single turn, so the gap widens with every turn. The scope text above said "almost no bytes" before this was measured and has been corrected — the real saving is the database work, not the bytes.
+
+**Two checks could not be made from a terminal** and are listed below: the personal board staying live while the global one caches, and `pickWinner`'s new limit, both of which need a signed-in session.
+
+Files: `lib/arcjet.ts` split into two bases and gained three clients; new `features/shell/guard-read.ts`, `features/shell/refused-notice.tsx`, and `app/(app)/forbidden.tsx`; `features/leaderboard/queries.ts` gained the cached global board; `features/arena/actions.ts`, `next.config.ts`, `.env.example`, and the three thread and leaderboard entry points were edited.
+
+- [x] Decide the approach
+- [x] A second Arcjet client for public reads, at a one-second deadline
+- [x] `detectBot` on both routes, with the allow-list feature 8's indexability decision implies
+- [x] `slidingWindow` per IP on both routes, deduped so one page view costs one token
+- [x] `forbidden()` and a boundary in the shell, so a denial is a real 403
+- [x] The global leaderboard aggregate cached, and busted on a vote
+- [x] `pickWinner` protected
+- [x] Found and fixed a blind spot in this feature's own failed-open reporting
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Verified against a production server: `curl` denied, a browser reads, the flood limited at exactly 30, and the cache measured at the database
+- [ ] Sign in and confirm a vote still lands, the board shows it immediately, and twenty votes a minute is not reachable by hand — needs a person
+- [ ] Confirm a verified search-engine crawler is still allowed on `/leaderboard`, which cannot be faked from a terminal because Arcjet verifies crawlers by reverse DNS rather than by user agent — needs a real crawl or a Console check
+- [ ] `arcjet auth login`, then `arcjet rules list`, to confirm no remote rules contradict what is in code
 
 ## Not doing right now
 
