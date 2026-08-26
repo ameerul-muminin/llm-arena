@@ -16,17 +16,17 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 
 ## At a glance
 
-| #   | Feature                                     | Phase      | Status      |
-| --- | ------------------------------------------- | ---------- | ----------- |
-| 1   | Connecting to a model                       | Foundation | done        |
-| 2   | Coding standards & tooling                  | Foundation | done        |
-| 3   | Data model                                  | Foundation | done        |
-| 4   | Design & look                               | Foundation | done        |
-| 5   | Model picker                                | Slice 1    | done        |
-| 6   | Send a prompt, parallel streams, and voting | Slice 1    | done        |
-| 7   | App shell & thread history                  | Slice 2    | done        |
-| 8   | Public thread visibility & sharing          | Slice 3    | done        |
-| 9   | Leaderboard: global & personal              | Slice 4    | not started |
+| #   | Feature                                     | Phase      | Status   |
+| --- | ------------------------------------------- | ---------- | -------- |
+| 1   | Connecting to a model                       | Foundation | done     |
+| 2   | Coding standards & tooling                  | Foundation | done     |
+| 3   | Data model                                  | Foundation | done     |
+| 4   | Design & look                               | Foundation | done     |
+| 5   | Model picker                                | Slice 1    | done     |
+| 6   | Send a prompt, parallel streams, and voting | Slice 1    | done     |
+| 7   | App shell & thread history                  | Slice 2    | done     |
+| 8   | Public thread visibility & sharing          | Slice 3    | done     |
+| 9   | Leaderboard: global & personal              | Slice 4    | deciding |
 
 ## Verification pass, 2026-08-17
 
@@ -1033,6 +1033,7 @@ Files: `features/shell/` gains `copy-link.tsx`, `not-found-notice.tsx`, and `pag
 - [x] Signed-out sidebar says what a signed-out visitor can actually do
 - [x] `noindex` on the thread route, and only there
 - [x] Copy-link control in the top bar, for owner and visitor alike
+- [x] Review fix: that control's confirmation now says “only its owner”, not “only you”
 - [x] `findThread` deduped per request with `cache()` — measured at 3 to 1
 - [x] Typecheck, lint, format, and a real build all clean
 - [x] Verified signed-out against a running production server: a real thread reads, a bad id and a bad path are both our not-found page, and neither offers a control that would fail
@@ -1041,14 +1042,91 @@ Files: `features/shell/` gains `copy-link.tsx`, `not-found-notice.tsx`, and `pag
 
 What this feature deliberately does not include: any stored per-thread visibility, and rich link previews. Both are parked — the first in the decision above, the second on the "not doing right now" list.
 
+#### Review fix, 2026-08-26
+
+**The copy confirmation addressed every reader as the owner.** The control is deliberately universal — the checklist above says “for owner and visitor alike”, and the component's own note says sharing is not the owner's exclusive act — but the sentence it produced said “only _you_ can add to it.” For a signed-out visitor, or any signed-in person who did not start the thread, that is false. It was false on the same screen that replaces the composer with “This thread belongs to someone else, so you can read it but not add to it”, so one feature was telling one reader two contradictory things about the same permission, roughly a screen apart.
+
+Worse than a wording slip, because that string is not only displayed. It is the text of the `role="status"` live region this feature deliberately added, so the false version was announced as well as shown — and announced to the audience with the least other evidence on screen about who owns what.
+
+It now reads “only its owner can add to it.” Third person is true for both audiences, which is the only thing a sentence attached to a control shown to both can afford to be. The general rule, worth keeping: **a control rendered for everyone cannot carry second-person copy about a permission not everyone has.** Nothing else in the app broke it — the read-only notice is already phrased for the person who sees it, and it is the only other place that says anything about who can write.
+
+Caught reading the code, not at a browser. The manual check still open above — pressing copy-link in both themes and confirming the copied link carries no `?live=` — is unaffected and still needs a person; it now also covers reading the corrected sentence.
+
+One file: `features/shell/copy-link.tsx`. Typecheck, lint, format, and a real build all clean.
+
 ## Slice 4: Leaderboard
 
 ### 9. Leaderboard: global & personal
 
 Two leaderboards from the same votes, one for everyone, one just for the signed-in user. Each row's win rate is the big, bold number, in the accent color, with a small bar next to it, always written as "won 4 of 5," never a bare percentage or a made-up score. Smaller, quieter numbers underneath for average speed and time-to-first-token, each clearly labeled. No cost or "cheapest" stat, every model is free, so that number never means anything here. First place gets a subtle highlight, nobody else does.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### Decided
+
+The screen already exists, framed and styled, on invented rows. So this feature is not a design job — feature 4 built `WinRate`, the table, and the placeholder note that marks the lie, and the page's own comment already promises that "feature 9 replaces the rows with aggregates over real votes and nothing about this screen has to change". That promise turned out to be _nearly_ true. One thing does have to change, and it is the one below about which speed number.
+
+**One aggregate shape, two scopes, parameterised by an optional owner id.** Global is every thread; personal is threads the signed-in person owns. Not two queries, not two ranking rules, not two tables — the same function called twice, because "just for the signed-in user" is a filter on the input, not a different kind of standing.
+
+**Personal filters on the thread's owner, not on `voterId`, and the two are provably the same set.** `castVote` refuses a non-owner, so every vote in a thread was cast by that thread's owner; there is no possible row where the two disagree. Given that, owner is the better filter for one reason that matters: the win record and the speed averages then describe _the same calls_. Filtering wins by `voterId` and speed by owner would have been two different slices printed on one row, which is the sort of thing that reads fine and quietly is not one fact.
+
+**The denominator is the one feature 6 already built, moved from a fold into SQL.** A turn counts for a model only if that model answered it _and_ the turn was judged. `features/thread/standings.ts` states the reasoning at length and it is unchanged here: a model that failed on a judged turn was never in that comparison, and counting it as a loss blames it for a race it did not run. Two implementations of one rule is a drift risk, and it is accepted deliberately rather than shared — a per-thread fold over turns the page has already read and a cross-thread SQL aggregate have nothing to usefully share but the sentence, and the sentence is written in both places.
+
+**Three `groupBy` calls, not one raw query.** Per model: answered responses (a count plus `_avg` of time-to-first-token and end-to-end tokens/sec), answered-and-judged responses (the denominator), and wins. Combined in a pure function. `$queryRaw` would do it in one round trip and would hand back rows this project has to hand-type, which under the no-`any` rule means writing a type that claims what the SQL returns with nothing checking the claim. Three small indexed aggregates against `@@index([modelId])` is the cheaper mistake.
+
+**The tokens/sec column is `endToEndTokensPerSecond`, and the fixture page had the wrong one.** Feature 1 settled this in writing — "**The leaderboard ranks on this one.** Ranking on generation speed would silently exclude every buffering model" — because `tokensPerSecond` is `null` by design for an answer that arrived in one flush. `AVG` skips nulls, so averaging generation speed would not have looked broken; it would have quietly produced a leaderboard about streaming models only. Labelled **Overall**, the same word `MetricsRow` uses, so a reader who has seen an answer card already knows which of the two speeds this is.
+
+**Only models the arena has actually run.** Listing the catalogue would be some sixty rows of em dashes, and a screen that is 95% "no data" is not a leaderboard. A model appears once it has a stored response. Names come from `getFreeModels()` and `namerFor`, which already answers for a slug that has stopped being free — the case feature 5 measured and feature 9 inherits, since a thread from last month can name a model this month's list has dropped.
+
+**Ranking is pure win rate, ties broken by more judged turns; models with nothing judged sort last.** Asked, because a reasonable person could go three ways and it changes what the top row means. The alternative was a minimum-votes threshold with an unranked group below it, which is more honest in the abstract and useless in fact: at the vote counts this app will have for a while, every model lands in the bottom group and the ranked table reads as empty. Sorting by absolute wins was the other option and it is worse — it makes the order disagree with the column it sits next to, since win rate stays the headline number. Pure rate is safe here only because of something feature 4 already built: `WinRate` never prints a percentage without the count behind it, so a model at the top on one vote says "won 1 of 1" in the same breath. The design already refuses to let a thin record look thick.
+
+**The toggle is a URL parameter, not client state.** `?scope=personal`, two links styled as a segmented control, with `aria-current` on the active one. Server-rendered, so no first paint at the wrong tab and no hydration flash; linkable, so a personal board is a place rather than a state; and it needs no client component at all. The page is already `force-dynamic` in spirit — real vote counts must never be frozen into build-time HTML, and reading `searchParams` makes that structural rather than remembered.
+
+**The toggle is shown only when signed in.** A Personal tab a signed-out visitor cannot use is precisely the defect feature 8's review fix wrote up: a control rendered for everyone that only works for some. Hiding it costs a signed-out visitor the knowledge that a personal board exists, which is a smaller cost than a dead control, and they find out the moment they sign in.
+
+**Two empty states, because there are two.** Nothing run yet is a plain sentence. Run but never judged is the table itself, with em dashes where the rates would be — `WinRate` already renders that correctly and prints an em dash rather than 0%, since printing zero would claim a model lost. A personal board with nothing in it is a third and gets its own sentence, about this person's own threads rather than about the app.
+
+**No cost column, and this is the one place worth saying why out loud.** Every other screen shows `$0.0000` because it is a real measured number. Here it would be a column of identical zeros restating a constant, and scope names that directly: "No cost or 'cheapest' stat, every model is free, so that number never means anything here." The schema agrees — `ModelResponse` has no cost column at all.
+
+Files: new `features/leaderboard/` (`types.ts`, `queries.ts`, `ranking.ts`, `copy.ts`, `table.tsx`, `scope-toggle.tsx`), and `app/(app)/leaderboard/page.tsx` rewritten to read real data and drop its `PlaceholderNote`.
+
+#### What the build turned out to be
+
+Every decision above shipped as written. Feature 4's promise that "nothing about this screen has to change" held, with the one exception it was already predicted to have. Three things the plan did not anticipate, one of which is the best argument this project has yet produced for the rule that a build has to actually be run.
+
+**A generic helper for the aggregates typechecked, linted, and built cleanly, then failed on the very first real request.** The three grouped reads differ only in their `where` and in whether they average anything, so the first version was one function taking the averages as an argument and receiving `undefined` for the two that count without measuring. That is not the same as omitting `_avg`: Prisma still emits the selection, and the query engine rejects it with `The select statement for type ModelResponseAvgAggregateOutputType needs at least one truthy value`. Nothing in `tsc`, `eslint`, or `next build` can see that — the argument is well-typed, the call is valid, and the failure lives in a payload assembled at runtime. It is now two small functions, `countByModel` and `measureByModel`, which is also plainer to read than the generic was.
+
+**Prisma requires an `orderBy` on a grouped read**, even one whose order is about to be thrown away. Ordering by slug rather than by a count, deliberately: the ranking is a pure function over all three results at once and cannot be expressed in any one of their `ORDER BY` clauses, so the database's order only needs to be stable rather than meaningful. Sorting by a count here would look like the ranking and quietly not be it.
+
+**`PlaceholderNote` is deleted, because feature 9 was its last caller.** The component's own note said it existed to be "removed feature by feature rather than hunted for", and feature 7's verification pass had already observed it was "down to `/leaderboard` alone". A marker for unwired surfaces with no unwired surfaces left is dead code, and keeping it would invite a future stub to be marked rather than finished.
+
+**The live data made the 0% row real, and it is not the same as an em dash.** `winRate` returns `null` for a model nobody has judged and `0` for one that was judged and lost, and the database happened to contain the second: MiniMax M3 answered a turn, that turn was voted on, and it did not win. It prints "0%, won 0 of 1" — which is a fact, not a missing number — while an unjudged model would print an em dash. Two states that a zero-filled implementation would have collapsed into one.
+
+**Two models are correctly absent.** `google/gemma-4-26b-a4b-it:free` and `thinkingmachines/inkling-small:free` are in the database with nothing but failures. They have no metrics to average and were never in a comparison to win, so every cell of their row would be an em dash — that is no data at all rather than "no votes yet", and the two should not look alike.
+
+**Verified twice, by two independent paths, against real votes.** The board was computed once as a single raw SQL statement with conditional joins, and once by the app's three Prisma aggregates rendered through the page, and the two agree exactly:
+
+| #   | Model            | Win rate         | Avg. to first token | Avg. overall tokens/sec |
+| --- | ---------------- | ---------------- | ------------------- | ----------------------- |
+| 1   | Nemotron 3 Ultra | 100%, won 1 of 1 | 1.3s                | 66 tok/s                |
+| 2   | Ox Alpha         | 50%, won 1 of 2  | 17s                 | 29 tok/s                |
+| 3   | MiniMax M3       | 0%, won 0 of 1   | 6.6s                | 35 tok/s                |
+
+Also checked against a production server, signed out: `?scope=personal` typed by hand returns the global board with no toggle rendered, as do `?scope=garbage` and a repeated `?scope=personal&scope=global`; the placeholder note is gone from the markup; and the page carries no `robots` meta, so it stays indexable while the thread route does not — which is what feature 8 decided. The owner filter itself was exercised separately in SQL for three cases: everyone, the real owner (identical to global, since they own every thread in the database), and a stranger (empty, which is the personal empty state).
+
+The throwaway probe scripts were deleted after running, the same way features 2, 3, 4, and 8 handled theirs.
+
+Files: new `features/leaderboard/` — `types.ts`, `scope.ts`, `queries.ts`, `ranking.ts`, `copy.ts`, `table.tsx`, `scope-toggle.tsx`. `app/(app)/leaderboard/page.tsx` rewritten. `features/shell/placeholder-note.tsx` deleted.
+
+- [x] Decide the approach
+- [x] `features/leaderboard/queries.ts` — three grouped aggregates, batched, scoped global or to one owner
+- [x] `features/leaderboard/ranking.ts` — pure: combine the aggregates, rank by win rate, unjudged last
+- [x] The page reads real votes; fixtures and the placeholder note deleted
+- [x] Speed column switched to the end-to-end figure and labelled "Avg. overall tokens/sec"
+- [x] Global / Personal as a URL-scoped segmented control, signed-in only
+- [x] All three empty states written
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Verified against a production server, signed out, with real votes — matches a raw-SQL board computed independently
+- [ ] Sign in and confirm the Personal board renders, the toggle marks the current tab in both themes, and its focus ring is visible — needs a person
+- [ ] Confirm the two empty states on screen: a signed-in account with no threads, and one with answers but no vote yet — neither is reachable from the current database, so both need a person
 
 ## Not doing right now
 
