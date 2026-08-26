@@ -2,6 +2,7 @@
 
 import { auth } from "@clerk/nextjs/server";
 import { request as arcjetRequest } from "@arcjet/next";
+import { updateTag } from "next/cache";
 
 import { getFreeModels } from "@/features/catalogue/catalogue";
 import { CATALOGUE_UNAVAILABLE } from "@/features/catalogue/copy";
@@ -9,15 +10,16 @@ import { checkLineUp, type LineUpCheck } from "@/features/catalogue/selection";
 import { failure } from "@/features/model-call/failures";
 import type { ModelCallFailure } from "@/features/model-call/types";
 import { describeDecisionForLog, toProtectionOutcome } from "@/features/model-call/protection";
+import { LEADERBOARD_TAG } from "@/features/leaderboard/queries";
 import { findResponseId, findThreadLineUp } from "@/features/thread/queries";
 import { appendTurn, castVote, createThread } from "@/features/thread/writes";
-import { ajStartTurn } from "@/lib/arcjet";
+import { ajStartTurn, ajVote } from "@/lib/arcjet";
 import { getPostHogClient } from "@/lib/posthog-server";
 
 /**
  * The two writes a person makes: submitting a prompt, and picking a winner.
  *
- * Both are actions rather than routes because neither streams — they are a
+ * Both are actions rather than routes because neither streams â they are a
  * single decision each, and the streaming half of this feature is already its
  * own endpoint for a reason no mutation shares.
  *
@@ -37,7 +39,7 @@ export type StartTurnResult =
       readonly ordinal: number;
       /**
        * Who this turn is actually being sent to. Returned rather than assumed,
-       * because the caller's own list is not the authority — a follow-up asks
+       * because the caller's own list is not the authority â a follow-up asks
        * whoever the thread stores, whatever the browser thought.
        */
       readonly modelIds: readonly string[];
@@ -93,7 +95,7 @@ const start = async (
 
   /*
    * A follow-up asks whoever the thread already stores, and the array the
-   * caller sent is ignored — that is the lock, and it is why a locked thread is
+   * caller sent is ignored â that is the lock, and it is why a locked thread is
    * never re-checked against the catalogue. A model leaving the free list
    * should not strand a conversation someone is in the middle of.
    *
@@ -205,7 +207,7 @@ export type PickWinnerResult =
  * Pick the winning answer for one turn.
  *
  * Named by turn and model, never by response id, because the browser is never
- * told one — see `findResponseId`. Everything that can refuse this is already
+ * told one â see `findResponseId`. Everything that can refuse this is already
  * written down in `refusals.ts`, including the rule the schema cannot express:
  * fewer than two answers means there was nothing to compare.
  */
@@ -215,6 +217,18 @@ export async function pickWinner(input: {
 }): Promise<PickWinnerResult> {
   const { userId } = await auth();
   if (userId === null) return { ok: false, message: failure("sign-in-required").message };
+
+  // Feature 10. This action had no protection at all: an authenticated write
+  // doing a read and a transaction, with nothing limiting how fast a script
+  // could ask for it. Guarded before the read, so a refused vote costs a
+  // decision and nothing else.
+  const decision = await ajVote.protect(await arcjetRequest(), { userId });
+  const outcome = toProtectionOutcome(decision);
+
+  if (!outcome.allowed) {
+    console.warn(`[arcjet] denied ${describeDecisionForLog(decision)}`);
+    return { ok: false, message: outcome.failure.message };
+  }
 
   const responseId = await findResponseId(input.turnId, input.modelId);
 
@@ -229,6 +243,13 @@ export async function pickWinner(input: {
   });
 
   if (!result.ok) return { ok: false, message: result.message };
+
+  // A vote is the only thing that changes the global board, so this is the one
+  // place that has to bust its cache. `updateTag` rather than `revalidateTag`:
+  // Next 16 made the latter take an expiry profile and points server actions at
+  // this one for read-your-own-writes, which is exactly the case here — the
+  // voter refreshes immediately afterwards and has to see their own vote.
+  updateTag(LEADERBOARD_TAG);
 
   getPostHogClient()?.capture({
     distinctId: userId,

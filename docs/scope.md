@@ -1128,6 +1128,123 @@ Files: new `features/leaderboard/` — `types.ts`, `scope.ts`, `queries.ts`, `ra
 - [ ] Sign in and confirm the Personal board renders, the toggle marks the current tab in both themes, and its focus ring is visible — needs a person
 - [ ] Confirm the two empty states on screen: a signed-in account with no threads, and one with answers but no vote yet — neither is reachable from the current database, so both need a person
 
+## Slice 5: Hardening
+
+### 10. Hardening the public read surface
+
+Feature 8 opened a door and feature 9 widened it. A thread is readable by anyone with the link and the leaderboard is readable by anyone at all, so there are now unauthenticated requests reaching Postgres with nothing in front of them. This feature works out what can actually be abused, protects the parts that can, and writes down the parts that cannot so nobody has to rediscover them.
+
+#### What was already there, and what it did not cover
+
+Every Arcjet rule in the app is `mode: "LIVE"`, and all of them sit on authenticated write paths:
+
+| Rule                                          | Client        | Called from            |
+| --------------------------------------------- | ------------- | ---------------------- |
+| `shield`                                      | base          | inherited              |
+| `detectBot({ allow: [] })`                    | base          | inherited              |
+| `detectPromptInjection`                       | `ajStartTurn` | the `startTurn` action |
+| `tokenBucket` 30 / 10 per min, keyed `userId` | `ajModelCall` | `POST /api/model-call` |
+
+The base client is never used directly, only the two derived from it, so shield and bot detection covered exactly two endpoints rather than the site. Every public page had nothing. And `pickWinner`, in the same file as the protected action, had nothing either — an authenticated write doing a read plus a transaction, with no limit of any kind.
+
+#### What can actually be abused, and what cannot
+
+Ruled out first, because two obvious-sounding risks are not real here:
+
+- **Thread id enumeration.** Real ids are 24-character cuid2 — `rdihouicisk7ptr8vndvxesp` — which is about 2^122. Feature 8's claim that the link is the key holds. Checked against live rows rather than assumed.
+- **`/` and `/models` as a database vector.** Neither touches Postgres. The catalogue fetch behind them is shared and cached for an hour, so a flood costs a React render and nothing else. Protecting them would add a decision round trip to the two lightest pages in the app to defend nothing.
+
+What is real:
+
+- **Hammering a shared thread.** The genuinely asymmetric read: one cheap `GET` pulls every turn, every response, and every full answer body, so a long thread is hundreds of kilobytes per request. It cannot be page-cached, because the owner and a visitor render differently.
+- **Hammering `/leaderboard`.** One `GET` becomes three aggregates over the whole response table. Cheap at today's six rows; the amplification is fixed while the scan cost grows with every prompt anyone sends.
+- **`pickWinner`.** Not the unauthenticated question, but a known unprotected write found while answering it, and cheap to close in the same pass.
+
+#### Ruled in
+
+**A second client, because the deadline is the problem.** The existing client sets a five-second decision deadline, raised deliberately because prompt injection timed out at the default and a rule that silently never runs is worse than no rule. That deadline must not sit on a page render: it would mean a bad moment at Arcjet stalls every public page for five seconds, which is a worse availability story than the abuse being defended against. So public reads get their own client at one second — enough for shield and bot detection, which the earlier verification pass already measured as answering well inside the 500ms default.
+
+**`detectBot`, and the existing configuration could not be reused.** This is the strongest single move: both routes are exactly what the reference calls an endpoint a script finds. But `allow: []` denies verified search engines, and feature 8 decided `/leaderboard` and `/models` stay indexable while the thread route does not. So the allow-list differs by route, and each one falls straight out of a decision feature 8 already made:
+
+- The thread route allows nothing. It is already `noindex`, and rich link previews are already parked, so there is no bot with business there.
+- The board allows `CATEGORY:SEARCH_ENGINE` and `CATEGORY:PREVIEW`. It is a product page that is meant to be found and meant to unfurl.
+
+**`slidingWindow`, not `tokenBucket`.** The bucket is right for model calls because one prompt costs one to three of them, so the variable `requested` amount carries real information. A page view always costs exactly one page view, so that machinery would buy nothing, and a sliding window avoids the boundary burst a fixed window allows. Sixty a minute on the thread route, thirty on the board — a real reader loads once and refreshes occasionally, and the owner's `router.refresh()` fires once per turn, once per retry, and once per vote, so even an active session is nowhere near either number.
+
+**Keyed by IP, which is the thing feature 3 deliberately moved away from.** Pulling Clerk forward was partly to stop an office behind one NAT sharing a single allowance. An anonymous reader has no id, so IP is the only key that exists, and the choice is being made again rather than forgotten. It is acceptable here only because the consequence differs: on a write path a shared allowance costs someone their ability to use the app, while here it costs a shared link a slow page, and the limits are set high enough that it should not happen at all.
+
+**Cache the global board, which matters more than the rate limit does.** Signed-out leaderboard output is byte-identical for every visitor, so a cached aggregate turns a flood from three queries per request into zero. That is a structural fix rather than a decision made per request, and it beats asking a remote service whether each visitor may run the same three queries again. Arcjet's job is what survives the cache.
+
+Only the global board is cached. The personal one requires an account, so it is not the anonymous vector, and leaving it live means the person most likely to have just voted sees their own vote immediately.
+
+**The thread read is deliberately not cached, and this is the one place the obvious idea was rejected.** Caching `findThread` would be the same structural win, and it would need `revalidateTag` on `createThread`, `appendTurn`, `recordAnswer`, `recordFailure`, and `castVote` — including from inside the streaming route, per model, many times per turn. Getting that wrong does not degrade a defence, it breaks the product: `router.refresh()` would re-render against stale data and a follow-up would appear not to have happened. A hardening pass is the wrong moment to take that risk, so the thread route is defended by Arcjet alone and the reason is recorded here rather than left looking like an oversight.
+
+**`pickWinner` joins the fast client**, with bot detection and a sliding window of twenty a minute keyed by the Clerk user. A vote is one row per turn and cannot be recast, so the natural ceiling is already low; this is about a script, not a person.
+
+**A denied read answers `403`, through `forbidden()`.** Which needs `experimental.authInterrupts`, and behaves exactly like the `notFound()` finding feature 8 measured and wrote up: the status and the boundary are correct, and the body ships as flight rather than as HTML. That is a downside for a human and the right answer for a scraper, which gets a correct status and a fraction of the page. Consistency with the 404 path is the reason to accept the flag rather than render a refusal at `200` — this project does not put a status on a response that contradicts what happened.
+
+#### Ruled out
+
+- **`detectPromptInjection` on a read path.** Nothing there carries text to a model. It is already in the one place it belongs, and feature 6 moved it there specifically to stop it running three times per prompt.
+- **`filter`, for VPN, Tor, or country.** It would punish a privacy-conscious reader of a shared link to defend against nothing this app has seen, and there is no geographic story here. Worth remembering only because it can be configured remotely without a redeploy, which makes it a tool for during an incident rather than before one.
+- **`validateEmail` and `protectSignup`.** Clerk owns signup end to end; Arcjet never sees that request.
+- **Guard, `@arcjet/guard`.** There is no non-HTTP protection site in this app — every one has a request or a server action context. This changes only if model calls ever move to a queue.
+- **`moderateContent`.** Guard-only, so ruled out by the above, and moderating model output is a product decision nobody has asked for.
+- **`sensitiveInfo`.** Ruled out for this problem, and the one worth revisiting. A public thread republishes whatever its owner pasted into a prompt, but that belongs on the write path in `startTurn`, before anything is stored, and "do we refuse a prompt containing a card number" is a product question rather than a hardening fix.
+
+#### Known gaps, written down rather than fixed
+
+- **`/ingest/*` is an open relay to PostHog under this app's own domain.** Anyone can post arbitrary bodies through it. It is a `next.config.ts` rewrite, resolved before any route code exists, so the only place to intercept it is `proxy.ts` — and Arcjet must not run from middleware. Closing it means turning the rewrite into a route handler, which changes how PostHog's own client is wired and is not this feature.
+- **Remote rules were not checked.** `arcjet auth status` reports the CLI session expired, and re-authenticating is a browser device flow. Anything configured in the Console rather than in code is invisible to this write-up.
+- **`curl` is now denied on both protected routes**, which is correct and is also a change to how this project verifies things. Every check from here needs a browser user agent, and a bare `curl` returning `403` is the protection working rather than the page being broken.
+
+#### What the build turned out to be
+
+Every decision above shipped. Four things the plan did not anticipate, and one of them was a defect in the coverage measurement this feature was adding.
+
+**The guard has to be deduped, and the reason is one the plan missed entirely.** A thread page reads the database from three places — `generateMetadata`, the page, and the top bar's parallel slot — which feature 8 already found and fixed with `cache()`. The same fact bites here twice over: if only the page guards, whichever of the other two runs first does the expensive read unprotected, and if all three guard naively that is three decisions and three tokens off a limit meant to count page views. So `guardThreadRead` is itself wrapped in `cache()`, which makes "every entry point guards" and "one decision per request" the same statement. Without it the sliding window would have counted every thread view as three.
+
+**`revalidateTag` is not the right call in Next 16, and the compiler said so.** It now takes a mandatory second argument naming an expiry profile, and its own doc comment points server actions at `updateTag` instead, for read-your-own-writes. That is exactly this case: the voter's screen refreshes immediately after the vote and has to show it. Caught by `tsc` rather than by a stale board in a browser.
+
+**The coverage check this feature added did not catch the one failure it actually saw.** Running locally with no client IP, the sliding window could not build a fingerprint, so the whole decision errored, every rule failed open, and every guarded page returned `200`. `unevaluatedRules` maps over `decision.results` — and on an errored decision that list is empty, so it reported full coverage for a request nothing had screened. It now checks `decision.isErrored()` as well, and reports `ALL_RULES`. Verified by reproducing the exact condition: a server started without `ARCJET_ENV` now logs `[arcjet] failed open on leaderboard: ALL_RULES` where it previously logged nothing at all. The model-call route was never exposed to this, because it handles `isErrored()` separately and always has.
+
+**`ARCJET_ENV=development` is now a real local-development requirement, and it was not before.** Every rule that existed until now keyed on `userId`, which localhost supplies fine. The moment a rule keys on IP, localhost has none, and the failure is not a quiet degradation — it is total, and it looks like the feature simply not working. Documented in `.env.example` next to the key, commented out, with the reason.
+
+#### Verified against a production server
+
+| Check                                    | Result                                                         |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| Bare `curl`, both guarded routes         | `403`, logged `reason=BOT`                                     |
+| Realistic browser headers, both routes   | `200`                                                          |
+| `/` and `/models`, either client         | `200` — deliberately unguarded                                 |
+| 40 browser requests at `/leaderboard`    | exactly 30 × `200` then 10 × `403`, logged `reason=RATE_LIMIT` |
+| 20 board renders inside one cache window | 2 database transactions, not 20                                |
+| An unmatched path                        | still `404`, unaffected                                        |
+
+The rate limit landing on exactly thirty is the sliding window's configured `max`, which is the number worth seeing rather than "roughly the right shape".
+
+The cache was measured against Postgres's own `xact_commit` counter rather than by instrumenting the app, with the probe's own overhead measured separately and subtracted — two back-to-back probe runs cost one commit each, so four commits across twenty renders is two renders' worth of real work.
+
+**A denied read is `403` with the body in flight, exactly as predicted.** Confirmed rather than assumed: the response carries `403`, the correct `<title>`, and no `<h1>` or `<main>` anywhere — the sentence appears only inside the `self.__next_f.push` payload. Same mechanism, same finding as feature 8's `notFound()` investigation. It is 16,450 bytes against 57,820 for the allowed thread page, and that thread has a single turn, so the gap widens with every turn. The scope text above said "almost no bytes" before this was measured and has been corrected — the real saving is the database work, not the bytes.
+
+**Two checks could not be made from a terminal** and are listed below: the personal board staying live while the global one caches, and `pickWinner`'s new limit, both of which need a signed-in session.
+
+Files: `lib/arcjet.ts` split into two bases and gained three clients; new `features/shell/guard-read.ts`, `features/shell/refused-notice.tsx`, and `app/(app)/forbidden.tsx`; `features/leaderboard/queries.ts` gained the cached global board; `features/arena/actions.ts`, `next.config.ts`, `.env.example`, and the three thread and leaderboard entry points were edited.
+
+- [x] Decide the approach
+- [x] A second Arcjet client for public reads, at a one-second deadline
+- [x] `detectBot` on both routes, with the allow-list feature 8's indexability decision implies
+- [x] `slidingWindow` per IP on both routes, deduped so one page view costs one token
+- [x] `forbidden()` and a boundary in the shell, so a denial is a real 403
+- [x] The global leaderboard aggregate cached, and busted on a vote
+- [x] `pickWinner` protected
+- [x] Found and fixed a blind spot in this feature's own failed-open reporting
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Verified against a production server: `curl` denied, a browser reads, the flood limited at exactly 30, and the cache measured at the database
+- [ ] Sign in and confirm a vote still lands, the board shows it immediately, and twenty votes a minute is not reachable by hand — needs a person
+- [ ] Confirm a verified search-engine crawler is still allowed on `/leaderboard`, which cannot be faked from a terminal because Arcjet verifies crawlers by reverse DNS rather than by user agent — needs a real crawl or a Console check
+- [ ] `arcjet auth login`, then `arcjet rules list`, to confirm no remote rules contradict what is in code
+
 ## Not doing right now
 
 Kept here so the plan stays honest about what's deliberately left out.

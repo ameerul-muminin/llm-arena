@@ -27,10 +27,25 @@ import "server-only";
  * rather than two overlapping ones.
  */
 
+import { unstable_cache } from "next/cache";
+
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 
 import type { ModelTally } from "./types";
+
+/**
+ * The tag a vote busts. Exported so `pickWinner` names the same string this
+ * file does, rather than the two agreeing by someone typing it twice.
+ */
+export const LEADERBOARD_TAG = "leaderboard";
+
+/**
+ * How long a stale global board is acceptable for, if no vote lands to bust it.
+ * A backstop rather than the primary mechanism — a vote revalidates the tag
+ * immediately, so this only covers a write that happened some other way.
+ */
+const BOARD_MAX_AGE_SECONDS = 60;
 
 /**
  * Only answered responses count anywhere on this screen. A failed call has no
@@ -115,3 +130,28 @@ export const tallyModels = async (ownerId: string | null): Promise<readonly Mode
     avgEndToEndTokensPerSecond: group._avg.endToEndTokensPerSecond,
   }));
 };
+
+/**
+ * The global board, shared across every visitor rather than recomputed for each
+ * one. Feature 10's structural half, and the part that matters more than the
+ * rate limit in front of it.
+ *
+ * Signed-out leaderboard output is byte-identical for everybody, so an
+ * unauthenticated flood was one cheap request turning into three aggregates
+ * over the whole response table, every single time. Cached, it turns into
+ * three aggregates *once*, and asking a remote service for permission to run
+ * the same three queries again is strictly worse than not running them.
+ *
+ * **Only the global board.** The personal one is behind an account, so it is
+ * not the anonymous vector, and leaving it live means the person most likely to
+ * have just voted sees their own vote immediately — which is exactly who is
+ * looking. Caching it would also mean one entry per user for no benefit.
+ *
+ * `unstable_cache` rather than `"use cache"`, because the latter needs
+ * `cacheComponents` turned on for the whole app, and a hardening pass is the
+ * wrong moment to change how every route in the project is rendered.
+ */
+export const tallyModelsGlobal = unstable_cache(async () => tallyModels(null), ["leaderboard"], {
+  tags: [LEADERBOARD_TAG],
+  revalidate: BOARD_MAX_AGE_SECONDS,
+});

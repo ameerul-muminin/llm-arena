@@ -9,11 +9,12 @@ import {
   NOTHING_ANSWERED,
   NOTHING_JUDGED,
 } from "@/features/leaderboard/copy";
-import { tallyModels } from "@/features/leaderboard/queries";
+import { tallyModels, tallyModelsGlobal } from "@/features/leaderboard/queries";
 import { anyJudged, rankModels } from "@/features/leaderboard/ranking";
 import { parseScope } from "@/features/leaderboard/scope";
 import { ScopeToggle } from "@/features/leaderboard/scope-toggle";
 import { LeaderboardTable } from "@/features/leaderboard/table";
+import { guardBoardRead } from "@/features/shell/guard-read";
 
 /**
  * Every model's real record, over real votes.
@@ -43,12 +44,20 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function LeaderboardPage({ searchParams }: PageProps<"/leaderboard">) {
+  await guardBoardRead();
+
   const [{ userId }, params] = await Promise.all([auth(), searchParams]);
   const scope = parseScope(params.scope, userId !== null);
 
+  /*
+   * The global board is shared and cached; the personal one is per-account and
+   * live. The reason for the split is in `queries.ts` — briefly, the anonymous
+   * board is the flood target and identical for everyone, while the person
+   * reading their own board is usually the person who just voted on it.
+   */
   const [catalogue, tallies] = await Promise.all([
     getFreeModels(),
-    tallyModels(scope === "personal" ? userId : null),
+    scope === "personal" && userId !== null ? tallyModels(userId) : tallyModelsGlobal(),
   ]);
 
   const rows = rankModels(tallies, namerFor(catalogue));
