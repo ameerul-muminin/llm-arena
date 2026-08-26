@@ -1,4 +1,4 @@
-# Note:
+# ✌️Note:
 
 This is basically me learning agentic coding. The workflow, everything. Cool project nonetheless. 
 
