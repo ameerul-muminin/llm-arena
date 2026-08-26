@@ -1,3 +1,7 @@
+# Note:
+
+This is basically me learning agentic coding. The workflow, everything. Cool project nonetheless. 
+
 # LLM Arena
 
 Send one prompt to up to three AI models at once, watch them answer side by side, and vote for the best one. Real votes and real per-call measurements build a leaderboard of which model is actually worth using.
