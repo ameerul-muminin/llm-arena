@@ -39,7 +39,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 type CopyState = "idle" | "copied" | "failed";
 
 const MESSAGES: Readonly<Record<Exclude<CopyState, "idle">, string>> = {
-  copied: "Link copied. Anyone with it can read this thread — only you can add to it.",
+  copied: "Link copied. Anyone with it can read this thread — only its owner can add to it.",
   failed: "Couldn’t copy the link. Copy it from the address bar instead.",
 };
 
