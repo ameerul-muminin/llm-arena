@@ -4,6 +4,7 @@ import { Show, SignInButton, UserButton } from "@clerk/nextjs";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { MouseEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -38,10 +39,22 @@ import { isCurrent, NAV_ITEMS } from "./nav";
  * three headings over four rows.
  *
  * The list is read on the server, in the layout above this, because this is a
- * client component and that is the last boundary that can query anything. A
- * signed-out visitor has no threads, which reads as an invitation rather than
- * as an error.
+ * client component and that is the last boundary that can query anything.
+ *
+ * **An empty list is two different facts and says two different things.** A
+ * signed-in person with no threads is being invited to send a prompt. Someone
+ * who has just opened a shared link cannot send one yet, so telling them to
+ * would be describing an action they do not have. Both used to read
+ * "Send a prompt and this fills up", which was right for one of them.
+ *
+ * `signedIn` is a prop rather than Clerk's `<Show>`, which the footer below uses
+ * for its own controls. The layout already resolved this on the server to decide
+ * whether to query at all, so passing the answer down renders the right sentence
+ * in the first paint instead of the wrong one until Clerk hydrates.
  */
+
+/** Ties the thread-history landmark to the heading a sighted reader already sees. */
+const THREADS_LABEL = "sidebar-threads-label";
 
 const ThreadRowLink = ({
   thread,
@@ -71,82 +84,120 @@ const ThreadRowLink = ({
 
 type AppSidebarProps = {
   readonly threads: readonly ThreadListRow[];
+  /** Whether anyone is signed in, which decides what an empty list means. */
+  readonly signedIn: boolean;
 };
 
-export const AppSidebar = ({ threads }: AppSidebarProps) => {
+export const AppSidebar = ({ threads, signedIn }: AppSidebarProps) => {
   const pathname = usePathname();
   const { setOpenMobile, isMobile } = useSidebar();
 
-  /* On a phone the sidebar is a drawer over the content, so following a link
-     inside it has to close it — otherwise you navigate and stare at the menu. */
-  const dismissOnMobile = () => {
-    if (isMobile) setOpenMobile(false);
+  /*
+   * On a phone the sidebar is a drawer over the content, so following a link
+   * inside it has to close it — otherwise you navigate and stare at the menu.
+   *
+   * This cannot go on `<Sidebar>`, which is where it started out. On mobile that
+   * component spreads its props onto Radix's `Dialog.Root`, which reads only its
+   * own handful of props and renders a context provider rather than an element,
+   * so an `onClick` there is dropped without a word — on exactly the path it was
+   * written for. It goes on the two real elements that contain the links.
+   *
+   * It fires only for a click that landed on a link, so tapping a group label or
+   * the empty space beside one does not pull the drawer shut underneath you.
+   */
+  const dismissOnMobile = (event: MouseEvent<HTMLElement>) => {
+    if (!isMobile) return;
+    if (event.target instanceof Element && event.target.closest("a") !== null) {
+      setOpenMobile(false);
+    }
   };
 
   return (
-    <Sidebar onClick={dismissOnMobile}>
-      <SidebarHeader className="px-4 pt-4 pb-2">
+    <Sidebar
+      drawerTitle="Navigation"
+      drawerDescription="The sections of the app, and the threads you have already run."
+    >
+      <SidebarHeader className="px-4 pt-4 pb-2" onClick={dismissOnMobile}>
         <Link href="/" className="rounded-md text-title font-semibold tracking-tight text-ink">
           LLM Arena
         </Link>
       </SidebarHeader>
 
-      <SidebarContent>
+      {/*
+       * Two `nav` landmarks, because shadcn's sidebar is divs the whole way down
+       * and would otherwise leave every link in the app outside a landmark —
+       * with the breadcrumb in the top bar as the only one on the page, which is
+       * exactly backwards. They are separate rather than one, because "the three
+       * places this app goes" and "the threads you have run" are different kinds
+       * of navigation, and a screen reader offering them as two named choices is
+       * more use than one unlabelled list of everything.
+       */}
+      <SidebarContent onClick={dismissOnMobile}>
         <SidebarGroup>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {NAV_ITEMS.map((item) => {
-                const current = isCurrent(item, pathname);
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={current}>
-                      {/*
-                       * `aria-current` as well as the rust tint: the current page
-                       * must not be signalled by colour alone.
-                       */}
-                      <Link href={item.href} aria-current={current ? "page" : undefined}>
-                        <item.icon />
-                        <span className={current ? "font-medium text-rust" : undefined}>
-                          {item.label}
-                        </span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
+            <nav aria-label="Sections">
+              <SidebarMenu>
+                {NAV_ITEMS.map((item) => {
+                  const current = isCurrent(item, pathname);
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton asChild isActive={current}>
+                        {/*
+                         * `aria-current` as well as the rust tint: the current
+                         * page must not be signalled by colour alone.
+                         */}
+                        <Link href={item.href} aria-current={current ? "page" : undefined}>
+                          <item.icon />
+                          <span className={current ? "font-medium text-rust" : undefined}>
+                            {item.label}
+                          </span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </nav>
           </SidebarGroupContent>
         </SidebarGroup>
 
         <SidebarSeparator />
 
         <SidebarGroup>
-          <SidebarGroupLabel className="eyebrow text-ink-muted">Your threads</SidebarGroupLabel>
+          {/* Labelled by the heading already on screen, rather than repeating the
+              same two words in an `aria-label` only some people ever get. */}
+          <SidebarGroupLabel id={THREADS_LABEL} className="eyebrow text-ink-muted">
+            Your threads
+          </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  <Link href="/">
-                    <Plus />
-                    <span>New thread</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+            <nav aria-labelledby={THREADS_LABEL}>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <Link href="/">
+                      <Plus />
+                      <span>New thread</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
 
-              {threads.map((thread) => (
-                <ThreadRowLink
-                  key={thread.id}
-                  thread={thread}
-                  active={pathname === `/thread/${thread.id}`}
-                />
-              ))}
+                {threads.map((thread) => (
+                  <ThreadRowLink
+                    key={thread.id}
+                    thread={thread}
+                    active={pathname === `/thread/${thread.id}`}
+                  />
+                ))}
 
-              {threads.length === 0 && (
-                <p className="px-2 py-1.5 text-detail text-ink-muted">
-                  Nothing here yet. Send a prompt and this fills up.
-                </p>
-              )}
-            </SidebarMenu>
+                {threads.length === 0 && (
+                  <p className="px-2 py-1.5 text-detail text-ink-muted">
+                    {signedIn
+                      ? "Nothing here yet. Send a prompt and this fills up."
+                      : "Sign in and the threads you run show up here."}
+                  </p>
+                )}
+              </SidebarMenu>
+            </nav>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>

@@ -11,6 +11,8 @@ import "server-only";
  * shared with.
  */
 
+import { cache } from "react";
+
 import { prisma } from "@/lib/prisma";
 
 import { toStoredThread } from "./mappers";
@@ -32,10 +34,21 @@ const THREAD_INCLUDE = {
   },
 } as const;
 
-export const findThread = async (id: string): Promise<StoredThread | null> => {
+/**
+ * Deduped for the length of one request, which is not an optimisation so much as
+ * a correction. Rendering a thread reads it three times — `generateMetadata`
+ * needs the title, the page needs the turns, and the top bar's parallel route
+ * needs both — and those are three separate server components with no way to
+ * hand each other a value. Without `cache` that is three identical queries for
+ * one screen, on the exact path feature 8 opens to anyone with a link.
+ *
+ * `cache` is per-request, so this shares nothing between visitors and cannot
+ * serve one person a thread as another person saw it.
+ */
+export const findThread = cache(async (id: string): Promise<StoredThread | null> => {
   const row = await prisma.thread.findUnique({ where: { id }, include: THREAD_INCLUDE });
   return row === null ? null : toStoredThread(row);
-};
+});
 
 /**
  * Feature 7's sidebar. Never the answers — a row is a title, the models that

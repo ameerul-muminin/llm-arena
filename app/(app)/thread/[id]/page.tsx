@@ -17,6 +17,13 @@ import { threadTitle } from "@/features/thread/title";
  * here. A thread that does not exist and one that was deleted are the same
  * plain not-found page either way.
  *
+ * **Readable by link, and deliberately not indexable.** "Anyone with the link"
+ * and "anyone searching" are different promises, and sharing a link is not
+ * consent to filing the conversation in a search index. Thread ids are
+ * unguessable, so the link genuinely is the key, and `noindex` is what keeps it
+ * the key. It is set here and nowhere else — the arena, the leaderboard, and the
+ * models list are the product and stay indexable.
+ *
  * `?live=<turnId>` is the handoff from the empty arena: a turn that has just
  * been created and has not been sent to anyone yet. It is honoured only for the
  * owner, and only while that turn genuinely has no answers, so it cannot be
@@ -28,7 +35,10 @@ export const dynamic = "force-dynamic";
 export async function generateMetadata({ params }: PageProps<"/thread/[id]">): Promise<Metadata> {
   const { id } = await params;
   const thread = await findThread(id);
-  return { title: thread === null ? "Thread — LLM Arena" : `${threadTitle(thread)} — LLM Arena` };
+  return {
+    title: thread === null ? "Thread — LLM Arena" : `${threadTitle(thread)} — LLM Arena`,
+    robots: { index: false, follow: false },
+  };
 }
 
 export default async function ThreadPage({ params, searchParams }: PageProps<"/thread/[id]">) {

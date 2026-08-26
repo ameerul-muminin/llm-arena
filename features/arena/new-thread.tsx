@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import type { Catalogue } from "@/features/catalogue/types";
+import { PageColumn } from "@/features/shell/page-column";
 
 import { startTurn } from "./actions";
 import { Composer } from "./composer";
@@ -54,7 +55,7 @@ export const NewThread = ({ catalogue }: NewThreadProps) => {
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-3 sm:px-4">
+    <PageColumn>
       <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
         <h1 className="text-title text-ink">Ask three models at once</h1>
         <p className="max-w-md text-body text-ink-muted">
@@ -72,6 +73,6 @@ export const NewThread = ({ catalogue }: NewThreadProps) => {
           error={error}
         />
       </div>
-    </div>
+    </PageColumn>
   );
 };

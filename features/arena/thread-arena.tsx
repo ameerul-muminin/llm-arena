@@ -4,6 +4,7 @@ import { useCallback } from "react";
 
 import { modelNameFor } from "@/features/catalogue/naming";
 import type { Catalogue } from "@/features/catalogue/types";
+import { PageColumn } from "@/features/shell/page-column";
 
 import { Composer, type LineUpModel } from "./composer";
 import { TurnBoard } from "./turn-board";
@@ -66,7 +67,7 @@ export const ThreadArena = ({
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-3 sm:px-4">
+    <PageColumn>
       <div className="flex-1 space-y-10 py-6">
         {arena.turns.map((turn) => (
           <TurnBoard
@@ -99,6 +100,6 @@ export const ThreadArena = ({
           </p>
         )}
       </div>
-    </div>
+    </PageColumn>
   );
 };
