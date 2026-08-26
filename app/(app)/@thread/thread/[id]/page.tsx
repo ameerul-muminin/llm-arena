@@ -27,6 +27,10 @@ export default async function ThreadTopBarSlot({ params }: PageProps<"/thread/[i
   const catalogue = await getFreeModels();
 
   return (
-    <ThreadBar title={threadTitle(thread)} standings={standingsFor(thread, namerFor(catalogue))} />
+    <ThreadBar
+      threadId={thread.id}
+      title={threadTitle(thread)}
+      standings={standingsFor(thread, namerFor(catalogue))}
+    />
   );
 }

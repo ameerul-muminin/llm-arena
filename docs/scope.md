@@ -25,7 +25,7 @@ There are rough hand-drawn sketches for the arena screen, the leaderboard, and t
 | 5   | Model picker                                | Slice 1    | done        |
 | 6   | Send a prompt, parallel streams, and voting | Slice 1    | done        |
 | 7   | App shell & thread history                  | Slice 2    | done        |
-| 8   | Public thread visibility & sharing          | Slice 3    | not started |
+| 8   | Public thread visibility & sharing          | Slice 3    | done        |
 | 9   | Leaderboard: global & personal              | Slice 4    | not started |
 
 ## Verification pass, 2026-08-17
@@ -886,7 +886,7 @@ The frame everything else sits inside: a top bar and sidebar that stay in place 
 
 **Every stub is marked, in one voice, by one component.** Fixture data that looks real is worse than no data, because it quietly becomes the thing people evaluate. A single `PlaceholderNote` marks each surface that is not yet wired, so the marker is consistent, greppable, and deleted feature by feature rather than hunted for. It says what the real thing will do, in the reader's terms, without narrating our issue tracker.
 
-**One fixture module, shared.** Feature 4's design reference already owns a fake turn — a streamer, a buffering model, and a failure. The arena placeholder needs the same three. They move to one module both import, because two copies of the same fake turn is a second place for them to drift, which is the same reasoning that put the timing maths in `metrics.ts` alone.
+**One fixture module, shared.** Feature 4's design reference already owns a fake turn — a streamer, a buffering model, and a failure. The arena placeholder needs the same three. They move to one module both import, because two copies of the same fake turn is a second place for them to drift, which is the same reasoning that put the timing maths in `metrics.ts` alone. (No longer true, and correctly so: feature 6 made the arena real, which left the design reference as the only reader. The module went back to `app/design/` and stopped being shared, because a "shared" module with one caller is just a module in the wrong folder. Recorded in the closing pass below.)
 
 **What is genuinely placeholder, and what is not:**
 
@@ -930,7 +930,7 @@ Nothing errors when this happens. The element inherits a size, the page looks ne
 
 **`hooks/` is a layer-wide folder, which this project's folder-by-feature rule otherwise forbids.** It exists because `components.json` points shadcn's generated hooks at it. Left as-is and noted in `coding-standards.md` alongside `components/ui/`: vendored code keeps its own conventions, and pretending otherwise would mean fighting every future `shadcn add`.
 
-Files: `app/(app)/` (the shell layout and the arena, leaderboard, and models screens), `features/shell/` (`app-sidebar`, `top-bar`, `standings`, `skip-link`, `placeholder-note`, `nav`, `fixtures`), `features/arena/` (`fixtures`, `fixture-turn`, `composer`), plus `hooks/use-mobile.ts` and four more vendored `components/ui/` files.
+Files, as this feature left them: `app/(app)/` (the shell layout and the arena, leaderboard, and models screens), `features/shell/` (`app-sidebar`, `top-bar`, `standings`, `skip-link`, `placeholder-note`, `nav`, `fixtures`), `features/arena/` (`fixtures`, `fixture-turn`, `composer`), plus `hooks/use-mobile.ts` and four more vendored `components/ui/` files. Features 5 and 6 have since moved the fixtures to `app/design/` and added `features/shell/thread-bar.tsx`.
 
 - [x] Decide the approach
 - [x] `app/(app)/` route group with the shell layout, and `/`, `/leaderboard`, `/models` inside it
@@ -943,9 +943,28 @@ Files: `app/(app)/` (the shell layout and the arena, leaderboard, and models scr
 - [x] Skip link, landmarks, `aria-current`, and a labelled toggle that reports its state — one `main`, one `header`, verified in the rendered HTML
 - [x] Found and fixed a silent font-size bug affecting every component in the design system
 - [x] Typecheck, lint, format, and a real build all clean; all four routes serve 200 with a clean server log
+- [x] Closing pass after features 5 and 6 landed on top of the shell — three defects found and fixed, below
 - [ ] Check it at mobile width in a real browser: drawer opens, traps focus, closes on escape, returns focus — needs a person
 
-Feature 7 is done bar that last check. What it deliberately does not include: sending a prompt, a live model catalogue, and persisted votes, all of which are marked on screen and belong to features 5 and 6.
+What this feature deliberately does not include: sending a prompt, a live model catalogue, and persisted votes, all of which were marked on screen and belong to features 5 and 6.
+
+#### Closing pass, 2026-08-25
+
+Features 5 and 6 were built on top of this shell, so it was worth going back over it once against a running server rather than assuming it survived. Most of it did. Everything below was checked in the rendered HTML, not read: exactly one `main`, one `header`, and one `h1` on every screen including a real thread, where the `h1` is the title arriving through the `@thread` parallel route; the skip link first in the document; `aria-current="page"` on the current nav item; the toggle's `aria-expanded` and its "Hide the sidebar" / "Show the sidebar" label; the standings cluster on a real thread with its screen-reader sentences; and the `cn()` font-size fix still holding, with `measured text-micro text-ink-muted` surviving intact. `PlaceholderNote` is now down to `/leaderboard` alone, which is right — features 5 and 6 deleted the rest as they made each surface real.
+
+Three things were actually broken.
+
+**The mobile drawer never closed when you followed a link inside it.** `AppSidebar` passed `onClick` to `<Sidebar>`, which on mobile spreads its props onto Radix's `Dialog.Root`. That component destructures the five props it owns and renders a context provider — no element — so the handler was dropped in silence, on precisely the path it existed for. The same spread is why `data-slot="sheet"` never appears in the DOM, which is how it was caught. On desktop the handler did attach, to a real div, where `isMobile` is false and it returned immediately. So it never ran anywhere, on any viewport, and nothing failed loudly enough to say so.
+
+It now sits on `SidebarHeader` and `SidebarContent`, which are real divs, and fires only when the click actually landed on an `a`. The footer is deliberately left out: the theme toggle and the user menu are not navigation, and closing the drawer when someone switches theme in it would be a small betrayal.
+
+**The only `nav` landmark on the page was the breadcrumb.** The checklist above says "landmarks — one `main`, one `header`", and that was true, but it quietly meant the app's actual navigation had none: shadcn's sidebar is divs the whole way down, so every nav item and every thread row sat outside any landmark while the breadcrumb, which is three words in the top bar, had one to itself. Two named `nav`s now, not one — `Sections` and the thread history, the latter labelled by the heading already on screen through `aria-labelledby` rather than repeating the same two words in an `aria-label` only some people receive. Separate rather than merged because they are different kinds of navigation, and two named choices beat one unlabelled list.
+
+**The drawer announced itself as vendored boilerplate.** Opening it read out "Sidebar", described as "Displays the mobile sidebar." — the name of the widget and a sentence about the code, which is what a screen reader got instead of what is in the drawer. This is the same defect feature 7 already fixed one layer out on the trigger. Rather than hardcoding this app's words into `components/ui/`, `Sidebar` took optional `drawerTitle` and `drawerDescription` props that default to the original strings, so the copy lives with the app that knows the answer and nothing else that mounts a `Sidebar` changes.
+
+Shadcn also ships `[&>button]:hidden` on the drawer, which hides `SheetContent`'s own close control — escape and the overlay still worked, but there was nothing to tap, on the one viewport where tapping is all there is. The class is gone and the control is back. `sidebar.tsx` is the only thing in this repo that mounts a `Sheet`, so nothing else moved.
+
+Both fixes are edits to vendored code and carry the cost feature 7 already recorded: a future `shadcn add --overwrite` touching `sidebar.tsx` will revert them.
 
 ## Slice 3: Public visibility & sharing
 
@@ -953,8 +972,74 @@ Feature 7 is done bar that last check. What it deliberately does not include: se
 
 Anyone should be able to open a thread's link and see it, without an account, that's what actually makes it shareable. Only sending a prompt and voting need sign-in. A made-up or deleted thread just shows a plain not-found page either way. The thread's real owner sees everything everyone else sees, plus the ability to actually use it.
 
-- [ ] Decide the approach
-- [ ] Build it
+#### Decided
+
+**The rule was already built; the visitor's half was not.** Most of this feature's enforcement landed inside features 6 and 7 on purpose, and it is correct as it stands: `queries.ts` never filters a read by owner and says why, `castVote` and `appendTurn` refuse a non-owner, the model-call route refuses one before spending anything on a model, and `ThreadArena` swaps the composer for a plain sentence when `isOwner` is false. Nothing there needs redoing. What this feature actually owns is everything a stranger sees on the way in — which turned out to be four things, none of them the thing the feature is named after.
+
+**The not-found page has to be ours.** `notFound()` on a made-up or deleted thread currently lands on Next's built-in 404: black on white, outside the shell, in the framework's voice, with no way back into the app. Scope asks for a plain not-found page, and that is not one. A `not-found.tsx` inside `app/(app)/` keeps the sidebar and the top bar, says it in this app's words, and offers the arena as the way out. It goes in the route group rather than at the root so it inherits the frame — a visitor who mistyped a thread id should land somewhere that still looks like the product.
+
+A deleted thread and a thread that never existed are deliberately the same page. Distinguishing them would tell anyone holding a stale link that the id was once real, which is a fact about someone else's thread.
+
+**The signed-out sidebar was telling a lie.** "Nothing here yet. Send a prompt and this fills up" is the right sentence for a signed-in person who has not run a thread, and the wrong one for someone who has just opened a shared link — they cannot send anything until they sign in, so the sentence describes an action they do not have. Two genuinely different states were rendering identically. The layout already knows which is which, so the sidebar is told, and a signed-out visitor gets a sentence about signing in instead of an instruction they cannot follow.
+
+**A thread is unlisted, not published.** `robots: { index: false, follow: false }`, on the thread route only. "Anyone with the link" and "anyone searching" are different promises, and sharing a link is not consent to putting the conversation into a search index. Thread ids are unguessable, so the link genuinely is the key. `/`, `/leaderboard`, and `/models` stay indexable — they are the product, not somebody's conversation. Rich link previews stay out, as scope already parks them.
+
+**Copy link, shown to everyone.** The control sits in the top bar beside the standings, because that is where the thread exists as an object rather than as a page you are scrolling. It confirms with "Link copied — anyone with it can read this thread", which is the one thing about this app's sharing model a person cannot infer from the screen: the note is carried by the act of sharing rather than parked permanently on the page, so it is read at the moment it matters.
+
+It is shown to a visitor as well as the owner. Sharing is not exclusively the owner's act — a thread gets passed on by whoever is looking at it — and the alternative leaves a visitor selecting the address bar, which is the affordance this feature exists to replace. It is a read of the current URL and a write to the clipboard, so there is nothing to authorise.
+
+**One read per request, not three.** `findThread` runs three times on every thread page load: once in `generateMetadata`, once in the page, and once more in the `@thread` top-bar slot. Three identical queries for one screen. React's `cache()` collapses them to one per request without any caller changing, and this is the moment for it, because this is the feature that invites strangers onto that exact path.
+
+**Deliberately not doing:** any notion of a thread being private, unlisted, or public as stored state. Every thread is readable by link, which is what scope says, and a visibility column with one possible value is a column that lies about having a choice.
+
+#### What the build turned out to be
+
+The five pieces landed as decided. Two things the plan did not anticipate: a framework behaviour that makes one of them only half-true, and a refinement to the copy-link control that came out of asking who actually needs the sentence it carries.
+
+**A thrown `notFound()` is delivered to the browser as flight, not as HTML.** The plan said the not-found page would keep the shell, and it does — in the browser. What it does not do is arrive as server-rendered markup: the response for a missing thread carries a correct `404` status and a correct `<title>`, and a body containing none of the page. The heading, the sentence, the way out, the sidebar, the top bar — all of it is in the RSC payload and is rendered by the client.
+
+This was measured rather than assumed, and three experiments were needed to place the blame correctly:
+
+1. Reproduced against a production build, not just `next dev`, so it is not a dev-server artifact.
+2. Two throwaway probe routes inside the group — one static, one `force-dynamic` — did the same thing, so it is not the thread route, not the `@thread` parallel slot, and not dynamic rendering.
+3. `app/(app)/not-found.tsx` was moved aside so the _root_ boundary caught the same throw. It did the same thing — even though that identical file **does** server-render when it is reached by a URL matching no route at all.
+
+So the deciding factor is how the boundary was reached, not which boundary it is. `notFound()` propagates as an error digest (`NEXT_HTTP_ERROR_FALLBACK;404`), React discards the HTML pass for that subtree, and the recovery tree ships as flight. Nothing in this repo can change that from inside a page.
+
+Two consequences worth being straight about. **The nested boundary costs nothing**, because the root one behaves identically on this path — so keeping it is a free win, since it is the one that has the shell. And **a visitor with JavaScript disabled sees a blank page with the right title**, which is a real gap and also one that already applies to every screen here: the arena is streamed into the browser and there is no version of this product that works without JS. Not worth engineering around; worth writing down.
+
+An unmatched URL is unaffected and server-renders properly, which is the more common way anyone arrives at a 404 by accident.
+
+**The copy-link disclosure moved from after the act to the act itself, and then out of a tooltip.** The decision above said the confirmation would carry the sentence about who can read the link. Building it surfaced the problem: a tooltip never appears on a touch device, so putting load-bearing information there hides it from exactly the people most likely to be sharing a link off a phone. It is a popover instead — visible to everyone, dismissible, and with `onOpenAutoFocus` prevented so pressing the control does not move focus off it.
+
+That left a second, quieter defect. The popover's content unmounts while it is closed, so a sentence inside it arrives as a live region that is _already populated_, which several screen readers do not announce at all. The announcement now comes from a separate `role="status"` span, present from first render and empty until there is something to say. Two elements holding one sentence looks like duplication and is not: one is what a sighted reader sees, the other is what everyone else hears.
+
+**The link is composed, never read off the address bar.** A thread the owner has just started is sitting on `?live=<turnId>`, a handoff between two of our own screens. Reading `window.location.href` would have shared that, handing the recipient a parameter that means nothing to them and is ignored for anyone who is not the owner. `CopyLink` takes the thread id and builds `origin` + `/thread/<id>`.
+
+**The clipboard is refusable, so the failure has a sentence.** An insecure context or a denied permission throws, and the rule that a person never sees an exception applies to a browser API exactly as much as to a provider error. A failed copy says so, and names the one thing that still works.
+
+**`PageColumn` was extracted, because it reached three callers.** The empty arena, a live thread, and now the not-found page all shared `mx-auto flex w-full max-w-7xl flex-1 flex-col px-3 sm:px-4`, which is the point `CLAUDE.md` says a repeated handful of classes has stopped being a coincidence. The sticky composer dock is still duplicated between the two arena screens at two copies, which is below that line and deliberately left alone.
+
+**The three-reads-per-load claim was true, and the fix is measured.** Instrumenting `findThread` and loading one thread logged **three** queries before `cache()` and **one** after. The probe was removed afterwards, the same way features 2, 3, and 4 handled their throwaway scripts.
+
+**The signed-out sidebar sentence is server-rendered, not resolved by Clerk in the browser.** `signedIn` is a prop from the layout, which had already called `auth()` to decide whether to query threads at all. Clerk's `<Show>` — which the footer beside it does use, for its own controls — would have meant the wrong sentence on first paint until hydration.
+
+Verified against a production server, signed out, with no Clerk cookie: the real thread reads `200` with exactly one `main`, one `header`, and one `h1`; `noindex, nofollow` on the thread and on nothing else; the copy-link trigger and its live region in the markup; the read-only notice present; and no composer, no `Pick this answer`, and no signed-in empty-state copy anywhere in the page. A made-up id and a mistyped path both return `404`. Server log clean.
+
+Files: `features/shell/` gains `copy-link.tsx`, `not-found-notice.tsx`, and `page-column.tsx`; `app/(app)/not-found.tsx` and `app/not-found.tsx` are new; `thread-bar.tsx`, `app-sidebar.tsx`, `app/(app)/layout.tsx`, `app/(app)/thread/[id]/page.tsx`, `app/(app)/@thread/thread/[id]/page.tsx`, `features/thread/queries.ts`, and both arena screens were edited.
+
+- [x] Decide the approach
+- [x] `app/(app)/not-found.tsx` — in the shell, in our voice, with a way back
+- [x] Signed-out sidebar says what a signed-out visitor can actually do
+- [x] `noindex` on the thread route, and only there
+- [x] Copy-link control in the top bar, for owner and visitor alike
+- [x] `findThread` deduped per request with `cache()` — measured at 3 to 1
+- [x] Typecheck, lint, format, and a real build all clean
+- [x] Verified signed-out against a running production server: a real thread reads, a bad id and a bad path are both our not-found page, and neither offers a control that would fail
+- [x] Found and documented that a thrown `notFound()` never server-renders, in three experiments
+- [ ] Press copy-link in a real browser and confirm the popover reads correctly in both themes, and that the copied link carries no `?live=` — needs a person
+
+What this feature deliberately does not include: any stored per-thread visibility, and rich link previews. Both are parked — the first in the decision above, the second on the "not doing right now" list.
 
 ## Slice 4: Leaderboard
 

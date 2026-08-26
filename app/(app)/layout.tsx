@@ -23,7 +23,9 @@ import { listThreadsForOwner } from "@/features/thread/queries";
  *
  * The thread list is read here rather than in the sidebar, because the sidebar
  * is a client component and this is the last server boundary above it. A signed
- * out visitor has no threads to list, which is a real state and not an error.
+ * out visitor has no threads to list, which is a real state and not an error —
+ * and a different one from a signed-in person who has not run a thread yet, so
+ * the answer is passed down rather than inferred from the empty array.
  */
 
 /** How many threads the sidebar shows before it stops being a list you can scan. */
@@ -36,7 +38,7 @@ export default async function AppLayout({ children, thread }: LayoutProps<"/">) 
   return (
     <SidebarProvider className="flex-1">
       <SkipLink />
-      <AppSidebar threads={threads} />
+      <AppSidebar threads={threads} signedIn={userId !== null} />
 
       <div className="relative flex w-full min-w-0 flex-1 flex-col bg-background">
         <TopBar thread={thread} />
