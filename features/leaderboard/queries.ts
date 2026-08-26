@@ -13,10 +13,25 @@ import "server-only";
  * under the no-`any` rule is the worse trade. Three narrow aggregates against
  * `@@index([modelId])` is the cheaper mistake.
  *
- * **They are batched in a transaction, not merely awaited together.** Not for
- * speed — for agreement. A vote landing between the second read and the third
- * would produce a row claiming more wins than judged turns, a number that cannot
- * be true and that would sit there looking merely surprising.
+ * **They are batched in a transaction at `RepeatableRead`, and the isolation
+ * level is the half that does the work.** Not for speed — for agreement. A vote
+ * landing between the second read and the third would produce a row claiming
+ * more wins than judged turns: a rate above 100%, printed as "won 3 of 2", and
+ * sorted to the top of the board for being the best score on it.
+ *
+ * A transaction alone does not prevent that, which is what an earlier version of
+ * this comment claimed. Postgres defaults to `READ COMMITTED`, where every
+ * *statement* takes a fresh snapshot — so three statements in one transaction
+ * can legitimately see three different states of the table. Verified against
+ * this database rather than argued: two identical counts either side of another
+ * connection's commit returned 0 and then 1 inside a single `READ COMMITTED`
+ * transaction, and 1 and 1 under `REPEATABLE READ`, which snapshots once at the
+ * first statement and holds it.
+ *
+ * `RepeatableRead` and not `Serializable`: these are pure reads, so there is
+ * nothing to serialise against, and a read-only `REPEATABLE READ` transaction in
+ * Postgres cannot raise a serialisation failure — which is why this needs no
+ * retry around it.
  *
  * **Scoping is one filter applied to all three.** Personal means threads this
  * person owns. It could equally have been keyed on `Vote.voterId`, and those are
@@ -29,7 +44,7 @@ import "server-only";
 
 import { unstable_cache } from "next/cache";
 
-import type { Prisma } from "@/lib/generated/prisma/client";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 
 import type { ModelTally } from "./types";
@@ -108,15 +123,20 @@ const measureByModel = (where: Prisma.ModelResponseWhereInput) =>
 export const tallyModels = async (ownerId: string | null): Promise<readonly ModelTally[]> => {
   const turn = inThreadsOwnedBy(ownerId);
 
-  const [answered, judged, won] = await prisma.$transaction([
-    measureByModel({ turn }),
-    // `isNot: null` is "this turn was judged". What the vote actually says does
-    // not matter here — only that one exists.
-    countByModel({ turn: { ...turn, vote: { isNot: null } } }),
-    // The back-reference from the composite key on `Vote`, so this reads "a vote
-    // points at this exact response", not "a vote exists on this turn".
-    countByModel({ turn, wonVote: { isNot: null } }),
-  ]);
+  const [answered, judged, won] = await prisma.$transaction(
+    [
+      measureByModel({ turn }),
+      // `isNot: null` is "this turn was judged". What the vote actually says does
+      // not matter here — only that one exists.
+      countByModel({ turn: { ...turn, vote: { isNot: null } } }),
+      // The back-reference from the composite key on `Vote`, so this reads "a vote
+      // points at this exact response", not "a vote exists on this turn".
+      countByModel({ turn, wonVote: { isNot: null } }),
+    ],
+    // One snapshot across all three. See the note at the top of this file: the
+    // transaction is not what makes these three agree, this is.
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
 
   const judgedBy = new Map(judged.map((group) => [group.modelId, group._count]));
   const wonBy = new Map(won.map((group) => [group.modelId, group._count]));

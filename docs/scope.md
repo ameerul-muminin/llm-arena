@@ -1128,6 +1128,29 @@ Files: new `features/leaderboard/` — `types.ts`, `scope.ts`, `queries.ts`, `ra
 - [ ] Sign in and confirm the Personal board renders, the toggle marks the current tab in both themes, and its focus ring is visible — needs a person
 - [ ] Confirm the two empty states on screen: a signed-in account with no threads, and one with answers but no vote yet — neither is reachable from the current database, so both need a person
 
+#### Review fix, 2026-08-27: the batched read needed an isolation level, not just a transaction
+
+Raised in review and valid. The comment at the top of `queries.ts` claimed the three aggregates were batched "in a transaction, not merely awaited together. Not for speed — for agreement", and said a vote landing mid-read "would produce a row claiming more wins than judged turns". The reasoning about the consequence was right. The claim that a transaction prevents it was wrong.
+
+Postgres defaults to `READ COMMITTED`, where a snapshot is taken per **statement**, not per transaction. Three statements inside one `BEGIN`/`COMMIT` can therefore see three different states of the table, which is exactly the interleaving the comment set out to rule out. Prisma's array-form `$transaction` inherits the database default, so nothing in the app was asking for anything stronger.
+
+Proven against this database rather than argued, because the whole point is that the intuitive reading of "transaction" is the wrong one. A scratch table, two connections, and two identical counts inside one reader transaction with the other connection committing an insert between them:
+
+| Isolation level   | First count | Second count | Verdict            |
+| ----------------- | ----------- | ------------ | ------------------ |
+| `READ COMMITTED`  | 0           | 1            | snapshots diverged |
+| `REPEATABLE READ` | 1           | 1            | one snapshot       |
+
+The visible damage was not subtle. `winRate` is `won / judged` with no clamp, and a vote landing between the `judged` read and the `won` read gives a model `won = judged + 1` — so the board would print "won 3 of 2" at 150%, and because the ranking sorts on that rate descending, the corrupted row would sort to **first place**. A wrong number that promotes itself to the top of the screen is the worst shape this bug could have taken.
+
+Fixed by naming the isolation level the comment was already relying on: `{ isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }`. `RepeatableRead` rather than `Serializable` because these are pure reads with nothing to serialise against, and a read-only `REPEATABLE READ` transaction in Postgres cannot raise a serialisation failure — so this needs no retry wrapper, which is the only reason the stronger level would have cost anything. `import type { Prisma }` became a value import, since the enum exists at runtime.
+
+**No clamp was added to `winRate`, deliberately.** Capping the rate at 100% would make this class of bug invisible instead of impossible, and the invariant now holds where it should — at the read, not at the formatter. `ModelTally.won`'s doc comment was corrected to say _why_ it is never greater than `judged`: it is a property of how the two counts are read together, not something the schema enforces.
+
+Re-verified: typecheck, lint, format, and a real build clean, and the board still renders its real numbers with every row satisfying `won <= judged` — Nemotron 1 of 1, Ox Alpha 1 of 2, MiniMax 0 of 1, unchanged from the table above. One thing that check did _not_ exercise: locally Arcjet logs `failed open on leaderboard: ALL_RULES`, because there is no client IP to fingerprint without `ARCJET_ENV=development`. That is feature 10's local-environment artifact and predates this fix, but it means the 200 above proves the aggregate ran, not that the rules ran.
+
+- [x] Found and fixed: batched reads at `READ COMMITTED` could report more wins than judged turns, and rank the bad row first
+
 ## Slice 5: Hardening
 
 ### 10. Hardening the public read surface

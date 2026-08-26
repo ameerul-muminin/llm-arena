@@ -31,7 +31,12 @@ export type ModelTally = {
    * comparison, so counting it there would blame it for a race it did not run.
    */
   readonly judged: number;
-  /** Judged turns this model won. Always `<= judged`, by construction. */
+  /**
+   * Judged turns this model won. Never more than `judged` — which is a property
+   * of how it is read, not of the schema: the two counts come from one
+   * `RepeatableRead` snapshot, so a vote landing mid-read cannot be counted as a
+   * win here and missed as a judgement there.
+   */
   readonly won: number;
   readonly avgTimeToFirstTokenMs: number | null;
   /**
