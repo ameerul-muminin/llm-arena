@@ -154,11 +154,24 @@ function Sidebar({
   className,
   children,
   dir,
+  drawerTitle = "Sidebar",
+  drawerDescription = "Displays the mobile sidebar.",
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
+  /**
+   * What the mobile drawer announces when it opens. Shadcn hardcodes "Sidebar"
+   * and "Displays the mobile sidebar." — the name of the widget and a sentence
+   * describing the code, which is what a screen reader reads out instead of
+   * what is actually in the drawer. They are props so the wording can live with
+   * the app that knows the answer rather than in vendored code, and they keep
+   * the original strings as defaults so nothing else that mounts a `Sidebar`
+   * changes behaviour.
+   */
+  drawerTitle?: string;
+  drawerDescription?: string;
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
 
@@ -185,7 +198,13 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          /*
+           * Shadcn ships `[&>button]:hidden` here, which hides `SheetContent`'s
+           * own close control and leaves the drawer with no visible way out —
+           * escape and the overlay still work, but there is nothing to tap. The
+           * control is kept.
+           */
+          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -194,8 +213,8 @@ function Sidebar({
           side={side}
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>Sidebar</SheetTitle>
-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+            <SheetTitle>{drawerTitle}</SheetTitle>
+            <SheetDescription>{drawerDescription}</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
