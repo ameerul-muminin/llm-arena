@@ -19,7 +19,12 @@ import { recordAnswer, recordFailure } from "./writes";
  */
 export async function* recordAndTrack(
   events: AsyncGenerator<ModelCallEvent, void>,
-  context: { readonly turnId: string; readonly modelId: string; readonly distinctId: string },
+  context: {
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly modelId: string;
+    readonly distinctId: string;
+  },
 ): AsyncGenerator<ModelCallEvent, void> {
   const posthog = getPostHogClient();
   let text = "";
@@ -40,6 +45,7 @@ export async function* recordAndTrack(
         event: "model_answered",
         properties: {
           model_id: context.modelId,
+          thread_id: context.threadId,
           turn_id: context.turnId,
           total_ms: event.metrics.totalMs,
           time_to_first_token_ms: event.metrics.timeToFirstTokenMs,
@@ -79,6 +85,7 @@ export async function* recordAndTrack(
         event: "model_failed",
         properties: {
           model_id: context.modelId,
+          thread_id: context.threadId,
           turn_id: context.turnId,
           failure_kind: event.failure.kind,
           retryable: event.failure.retryable,

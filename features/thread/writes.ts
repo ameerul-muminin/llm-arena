@@ -207,11 +207,12 @@ export const castVote = async (input: {
   readonly turnId: string;
   readonly voterId: string;
   readonly winningResponseId: string;
-}): Promise<WriteResult<{ readonly voteId: string }>> =>
+}): Promise<WriteResult<{ readonly voteId: string; readonly threadId: string }>> =>
   prisma.$transaction(async (tx) => {
     const turn = await tx.turn.findUnique({
       where: { id: input.turnId },
       select: {
+        threadId: true,
         thread: { select: { ownerId: true } },
         vote: { select: { id: true } },
         responses: { select: { id: true, status: true } },
@@ -240,5 +241,5 @@ export const castVote = async (input: {
       select: { id: true },
     });
 
-    return succeed({ voteId: vote.id });
+    return succeed({ voteId: vote.id, threadId: turn.threadId });
   });

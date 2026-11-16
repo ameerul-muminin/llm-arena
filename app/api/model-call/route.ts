@@ -134,7 +134,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         },
         request.signal,
       ),
-      { turnId: parsed.request.turnId, modelId: parsed.request.modelId, distinctId },
+      {
+        threadId: owner.threadId,
+        turnId: parsed.request.turnId,
+        modelId: parsed.request.modelId,
+        distinctId,
+      },
     ),
   );
 }

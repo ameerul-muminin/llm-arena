@@ -862,6 +862,27 @@ extended), `features/catalogue/naming.ts`,
 `app/(app)/thread/[id]` and `app/(app)/@thread` routes, and a migration adding
 `Thread.modelIds`.
 
+#### Analytics fix, 2026-11-16: the funnel events now share a thread key
+
+Only `prompt_sent` carried `thread_id`. `model_answered`, `model_failed` and
+`vote_cast` carried `turn_id` alone, so the prompt-to-vote funnel could only be
+joined turn by turn, never per thread.
+
+The thread id now goes on all four events, and it always comes from the
+server, never from the browser. The model-call route already reads the turn's
+thread for its ownership check and passes that id into `recordAndTrack`.
+`castVote` already reads the turn inside its transaction, so it now returns the
+turn's `threadId` with the vote id. `pickWinner` keeps its `(turnId, modelId)`
+input, unchanged.
+
+Not in this fix: none of these server-side events carries `$session_id`, so a
+per-session funnel is still not possible. That needs the browser's session id
+on the server action and the model-call request, which is a separate decision.
+
+- [x] `thread_id` on `model_answered`, `model_failed` and `vote_cast`, read on the server
+- [x] Typecheck, lint, format, and a real build all clean
+- [ ] Send a prompt and vote while signed in, then confirm all three events in PostHog carry the same `thread_id` — needs a person
+
 ## Slice 2: App shell & thread history
 
 ### 7. App shell & thread history
