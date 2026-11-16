@@ -254,7 +254,11 @@ export async function pickWinner(input: {
   getPostHogClient()?.capture({
     distinctId: userId,
     event: "vote_cast",
-    properties: { turn_id: input.turnId, model_id: input.modelId },
+    properties: {
+      thread_id: result.value.threadId,
+      turn_id: input.turnId,
+      model_id: input.modelId,
+    },
   });
   await getPostHogClient()?.flush();
 
